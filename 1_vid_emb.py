@@ -12,15 +12,15 @@ import chromadb
 # --------------
 # --- Config ---
 # --------------
-VIDEO_DIR = "./data/videos"
+VIDEO_PATH = "./data/videos"
 NUM_FRAMES = 16
 CHUNK_DURATION = 16
 OUTPUT_PATH = "./out"
 OUTPUT_EMB = "./out/video_embeddings.npy"
 OUTPUT_INDEX = "./out/video_index.json"
-VIDEO_CHUNKS_DIR = "./out/video_chunks"  # Directory to save video chunks
+VIDEO_CHUNKS_PATH = "./out/video_chunks"
 os.makedirs(OUTPUT_PATH, exist_ok=True)
-os.makedirs(VIDEO_CHUNKS_DIR, exist_ok=True)  # Create chunks directory
+os.makedirs(VIDEO_CHUNKS_PATH, exist_ok=True)
 CHROMA_PATH = "./out/chroma_db"
 COLLECTION_NAME = "video_embeddings"
 SAVE_CHUNKS = True  # Toggle to enable/disable chunk saving
@@ -39,10 +39,14 @@ print(f"Using device: {device}")
 # ------------------
 # --- Load model ---
 # ------------------
-MODEL_ID = "microsoft/xclip-base-patch16-16-frames"
-# MODEL_ID = "OpenGVLab/InternVideo2-CLIP-6B-224p-f8" #requires flash attention, CUDA
-processor = AutoProcessor.from_pretrained(MODEL_ID)
-model = AutoModel.from_pretrained(MODEL_ID).to(device)
+from transformers import AutoImageProcessor
+MODEL_ID = "OpenGVLab/InternVL3-2B"
+processor = AutoImageProcessor.from_pretrained(MODEL_ID)
+model = AutoModel.from_pretrained(
+    MODEL_ID,
+    torch_dtype=torch.bfloat16,
+    low_cpu_mem_usage=True,
+    trust_remote_code=True).to(device)
 model.eval()
 
 # -------------------------
@@ -67,7 +71,7 @@ def sample_chunk_frames_1fps(cap, start_sec, end_sec, num_frames=16, save=False,
     if save and video_name is not None and chunk_id is not None:
         base_name = os.path.splitext(video_name)[0]
         chunk_filename = f"{base_name}_chunk_{chunk_id:03d}_{start_sec:04d}s-{end_sec:04d}s_1fps.mp4"
-        chunk_path = os.path.join(VIDEO_CHUNKS_DIR, chunk_filename)
+        chunk_path = os.path.join(VIDEO_CHUNKS_PATH, chunk_filename)
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
         out = cv2.VideoWriter(chunk_path, fourcc, 1.0, (width, height))  # force 1 FPS
 
@@ -102,11 +106,14 @@ def sample_chunk_frames_1fps(cap, start_sec, end_sec, num_frames=16, save=False,
 def get_chunk_embedding(frames):
     if len(frames) == 0:
         return None
-    inputs = processor(videos=frames, return_tensors="pt").to(device)
+    inputs = processor(images=frames, return_tensors="pt", padding=True).to(device)
+    inputs['pixel_values'] = inputs['pixel_values'].to(torch.bfloat16)
     with torch.no_grad():
-        outputs = model.get_video_features(**inputs)
-    emb = outputs / outputs.norm(dim=-1, keepdim=True)  # normalize
-    return emb[0].cpu().numpy()
+        vision_outputs = model.vision_model(**inputs)
+        frame_embeddings = vision_outputs.pooler_output
+        chunk_embedding = torch.mean(frame_embeddings, dim=0)
+    normalized_emb = chunk_embedding / chunk_embedding.norm(dim=-1, keepdim=True)
+    return normalized_emb.to(torch.float32).cpu().numpy()
 
 # --- Process one video into chunks ---
 def process_video(video_path, chunk_duration=16, num_frames=16):
@@ -143,11 +150,11 @@ def process_video(video_path, chunk_duration=16, num_frames=16):
 all_embeddings = []
 video_index = {}
 
-for i, fname in enumerate(os.listdir(VIDEO_DIR)):
+for i, fname in enumerate(os.listdir(VIDEO_PATH)):
     if not fname.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
         continue
 
-    path = os.path.join(VIDEO_DIR, fname)
+    path = os.path.join(VIDEO_PATH, fname)
     print(f"Processing {fname} ...")
 
     chunk_embs = process_video(path, CHUNK_DURATION, NUM_FRAMES)
@@ -176,4 +183,4 @@ for i, fname in enumerate(os.listdir(VIDEO_DIR)):
         
 print("✅ Done. Saved embeddings to index")
 if SAVE_CHUNKS:
-    print(f"✅ Video chunks saved to: {VIDEO_CHUNKS_DIR}")
+    print(f"✅ Video chunks saved to: {VIDEO_CHUNKS_PATH}")

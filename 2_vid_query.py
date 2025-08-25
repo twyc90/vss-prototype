@@ -1,15 +1,35 @@
+import os
+import cv2
 import torch
+import numpy as np
+import json
+from transformers import AutoProcessor, AutoModel, XCLIPModel, AutoTokenizer
+import os
+import math
+import uuid
 import chromadb
-from transformers import AutoProcessor, AutoModel
 from FlagEmbedding import FlagReranker
 
+# --------------
 # --- Config ---
+# --------------
+VIDEO_PATH = "./data/videos"
+NUM_FRAMES = 16
+CHUNK_DURATION = 16
+OUTPUT_PATH = "./out"
+OUTPUT_EMB = "./out/video_embeddings.npy"
+OUTPUT_INDEX = "./out/video_index.json"
+VIDEO_CHUNKS_PATH = "./out/video_chunks"
+os.makedirs(OUTPUT_PATH, exist_ok=True)
+os.makedirs(VIDEO_CHUNKS_PATH, exist_ok=True)
 CHROMA_PATH = "./out/chroma_db"
 COLLECTION_NAME = "video_embeddings"
-MODEL_ID = "microsoft/xclip-base-patch16-16-frames"
+SAVE_CHUNKS = True  # Toggle to enable/disable chunk saving
 RERANKER_MODEL_NAME = "BAAI/bge-reranker-base"
 
+# -------------------------------------
 # --- Device selection (MPS on Mac) ---
+# -------------------------------------
 if torch.backends.mps.is_available():
     device = "mps"
 elif torch.cuda.is_available():
@@ -18,25 +38,39 @@ else:
     device = "cpu"
 print(f"Using device: {device}")
 
-# --- Load X-CLIP model (same as used for video encoding) ---
-processor = AutoProcessor.from_pretrained(MODEL_ID)
-model = AutoModel.from_pretrained(MODEL_ID).to(device)
+# ------------------
+# --- Load model ---
+# ------------------
+from transformers import AutoImageProcessor
+MODEL_ID = "OpenGVLab/InternVL3-2B"
+processor = AutoImageProcessor.from_pretrained(MODEL_ID)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=False)
+model = AutoModel.from_pretrained(
+    MODEL_ID,
+    torch_dtype=torch.bfloat16,
+    low_cpu_mem_usage=True,
+    trust_remote_code=True).to(device)
 model.eval()
 
 # --- Load reranker (cross-encoder) ---
 reranker = FlagReranker(RERANKER_MODEL_NAME)
 
+# -------------------------
 # --- Connect to Chroma ---
+# -------------------------
 client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = client.get_or_create_collection(name=COLLECTION_NAME)
+collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
 # --- Text embedding function ---
 def get_text_embedding(text, device="cpu"):
-    inputs = processor(text=[text], return_tensors="pt", padding=True).to(device)
+    inputs = tokenizer(text, return_tensors="pt").to(device)
     with torch.no_grad():
-        emb = model.get_text_features(**inputs)
-        emb = emb / emb.norm(dim=-1, keepdim=True)
-    return emb[0].cpu().numpy()
+        outputs = model.language_model(**inputs, output_hidden_states=True)
+        last_hidden_state = outputs.hidden_states[-1]
+        text_emb_1536d = last_hidden_state.mean(dim=1)
+        text_emb_1024d = model.text_projection(text_emb_1536d)
+        emb = text_emb_1024d / text_emb_1024d.norm(dim=-1, keepdim=True)
+        return emb[0].to(torch.float32).cpu().numpy()
 
 # --- Search function ---
 def search_videos(query, top_k=10, rerank_top_n=5):
