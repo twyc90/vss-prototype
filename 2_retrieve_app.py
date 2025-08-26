@@ -9,12 +9,13 @@ from FlagEmbedding import FlagReranker
 
 # --- Configuration ---
 OUTPUT_CHROMA_DIR = "./out/chroma_db"
-COLLECTION_NAME = "video_embeddings"
+COLLECTION_NAME = "chunk_captions"
 EMBEDDING_MODEL_NAME = 'BAAI/bge-m3'
 RERANKER_MODEL_NAME = 'BAAI/bge-reranker-large'
 # RERANKER_MODEL_NAME = 'BAAI/bge-reranker-v2-gemma'
 ANNOTATED_CHUNK_DIR = "./out/video_chunks_cv"
 OUTPUT_METADATA_DIR = "./out/metadata"
+VIDEO_COLLECTION_NAME = "video_captions"
 
 # --- Caching Models for Performance ---
 @st.cache_resource
@@ -31,8 +32,9 @@ def load_chroma_collection():
         return None
     client = chromadb.PersistentClient(path=OUTPUT_CHROMA_DIR)
     collection = client.get_collection(name=COLLECTION_NAME)
+    video_collection = client.get_collection(name=VIDEO_COLLECTION_NAME)
     print("Collection loaded successfully.")
-    return collection
+    return collection, video_collection
 
 def search_and_rerank(query, embedding_model, reranker_model, collection, top_n=25, rerank_top_k=5):
     if not query:
@@ -68,7 +70,6 @@ def browse_collection(collection, limit=30):
     )
     if not results['ids']:
         return []
-
     formatted_results = []
     for meta in results['metadatas']:
         formatted_results.append({'metadata': meta})
@@ -89,25 +90,21 @@ def display_results(results_list):
     if not results_list:
         st.warning("No results found.")
         return
-
     st.success(f"Displaying {len(results_list)} results:")
     for i, result in enumerate(results_list):
         st.markdown("---")
         _col1, _col2, _col3 = st.columns([1, 10, 1])
         col1, col2 = _col2.columns([1, 2])
-        
         with col1:
             video_path = result['metadata'].get('chunk_path', '')
             if os.path.exists(video_path):
                 st.video(video_path)
             else:
                 st.warning(f"Video not found at: {video_path}")
-
         with col2:
             caption_str = result["metadata"].get('caption', '{}')
             caption = parse_json(caption_str)
             st.subheader(f"Rank {i+1}")
-
             if isinstance(caption, dict) and caption:
                 st.markdown(f"**Video Summary:** {caption.get('Video Summary', '')}")
                 st.markdown(f"**Features:**")
@@ -115,7 +112,6 @@ def display_results(results_list):
                     st.text(f"- {' | '.join(str(v) for v in feature.values())}")
             else:
                 st.markdown(f"**Caption:** `{caption_str}`")
-
             if 'rerank_score' in result:
                 score = result['rerank_score']
                 color = "green" if score > 0 else "red"
@@ -125,13 +121,10 @@ def display_results(results_list):
                     </p>""",
                     unsafe_allow_html=True)
             st.markdown(f"**Chunk Path:** `{result['metadata'].get('chunk_path', 'N/A')}`")
-
-            # --- MODIFIED CODE: Added expander for object tracking info ---
             chunk_path = result['metadata'].get('chunk_path', 'N/A')
             if chunk_path:
                 metadata_filename = os.path.basename(chunk_path).replace(os.path.splitext(chunk_path)[1], '.json')
                 metadata_path = os.path.join(OUTPUT_METADATA_DIR, metadata_filename)
-
                 if os.path.exists(metadata_path):
                     with st.expander("Show Object Tracking Info"):
                         try:
@@ -141,14 +134,34 @@ def display_results(results_list):
                             if objects:
                                 for obj in objects:
                                     label = obj.get('label', 'N/A')
-                                    confidence = obj.get('last_confidence') # Assumes 'last_confidence' is saved in metadata
+                                    confidence = obj.get('last_confidence') 
                                     st.markdown(f"**Object ID {obj.get('id', 'N/A')}**: `{label}` (Confidence: `{confidence:.2f}`)")
-                                    # st.text(f"  - Frames present: {obj.get('frames_present', [])}")
                             else:
                                 st.write("No objects were tracked in this video chunk.")
                         except Exception as e:
                             st.error(f"Could not read metadata file: {e}")
-            # --- END OF MODIFICATION ---
+
+def display_summary_results(results_list):
+    if not results_list:
+        st.warning("No video summaries found in the collection.")
+        return
+    st.success(f"Displaying {len(results_list)} random video summaries:")
+    for result in results_list:
+        st.markdown("---")
+        _col1, _col2, _col3 = st.columns([1, 10, 1])
+        col1, col2 = _col2.columns([1, 2])
+        video_name = result['metadata'].get('video_name', 'N/A')
+        summary = result['metadata'].get('summary', 'No summary available.')
+        video_path = result['metadata'].get('video_path', '')
+        with col1:
+            if os.path.exists(video_path):
+                st.video(video_path, width=300)
+            else:
+                st.warning(f"Video not found at: {video_path}")
+        with col2:
+            st.subheader(f"🎬 Summary for: `{video_name}`")
+            st.markdown(summary)
+
 
 
 # --- Streamlit UI ---
@@ -166,10 +179,10 @@ with _col2:
 
 # Load models and collection
 embedding_model, reranker_model = load_models()
-collection = load_chroma_collection()
+collection, video_collection = load_chroma_collection()
 
 # --- Create Tabs ---
-tab1, tab2 = _col2.tabs(["🔎 Search by Query", "📚 Browse Collection"])
+tab1, tab2, tab3 = _col2.tabs(["🔎 Search Chunk by Query", "📚 Browse Chunks", "📜 Browse Video Summaries"])
 
 # --- Search Tab ---
 with tab1:
@@ -179,10 +192,18 @@ with tab1:
             search_results = search_and_rerank(query, embedding_model, reranker_model, collection)
             display_results(search_results)
 
-# --- Browse Tab ---
+# --- Browse Chunk Tab ---
 with tab2:
     st.subheader(f"Browsing the random 30 items in the collection")
     if st.button("Load Items"):
         with st.spinner("Fetching collection..."):
             browse_results = browse_collection(collection, limit=30)
             display_results(browse_results)
+
+# --- Browse Video Summaries Tab ---
+with tab3:
+    st.subheader("Browse random aggregated video summaries")
+    if st.button("Load Random Summaries"):
+        with st.spinner("Fetching summaries..."):
+            summary_results = browse_collection (video_collection, limit=10)
+            display_summary_results(summary_results)
