@@ -1,0 +1,39 @@
+{
+    "chunk_path": "./out/video_chunks/CCTV8|VID_GEN6_chunk_1.mp4",
+    "motion_detected": true,
+    "objects": [
+        {
+            "id": 0,
+            "label": "car",
+            "initial_pos": [
+                402.7261047363281,
+                293.6029052734375
+            ],
+            "last_pos": [
+                380.02655029296875,
+                285.7574768066406
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                9,
+                12,
+                15,
+                18,
+                21,
+                24,
+                27,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48
+            ],
+            "last_confidence": 0.8699328899383545
+        }
+    ],
+    "vlm_caption": "```json\n{\n  \"Features\": [\n    {\n      \"tracker\": \"Car\",\n      \"description\": \"A blue Volkswagen Golf Mk5 with a large rear spoiler, aftermarket wheels, and a 'Supreme' sticker on the windshield. The car appears to be modified for performance or aesthetics.\",\n      \"location\": \"On a grassy field, possibly a track or testing area.\"\n    }\n  ],\n  \"Video Summary\": \"This video clip shows a modified blue Volkswagen Golf Mk5 on a grassy field, likely undergoing testing or being filmed.\"\n}\n```"
+}

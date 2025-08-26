@@ -1,0 +1,565 @@
+{
+    "chunk_path": "./out/video_chunks/CCTV5|VID_GEN2_chunk_0.mp4",
+    "motion_detected": true,
+    "objects": [
+        {
+            "id": 0,
+            "label": "person",
+            "initial_pos": [
+                628.2794189453125,
+                357.1954345703125
+            ],
+            "last_pos": [
+                604.9362182617188,
+                357.89599609375
+            ],
+            "frames_present": [
+                3,
+                6,
+                9,
+                12,
+                15,
+                18,
+                21,
+                24,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48,
+                51,
+                54,
+                57,
+                60,
+                63,
+                66,
+                69,
+                72,
+                78,
+                81,
+                84,
+                87,
+                90,
+                93,
+                96,
+                99,
+                102,
+                105,
+                108,
+                111,
+                114,
+                117,
+                120,
+                123,
+                126,
+                129,
+                132,
+                135,
+                138,
+                144,
+                147,
+                150,
+                153,
+                156,
+                159,
+                162,
+                165,
+                168,
+                171,
+                174,
+                177,
+                180,
+                183,
+                186,
+                189
+            ],
+            "last_confidence": 0.6868478655815125
+        },
+        {
+            "id": 1,
+            "label": "car",
+            "initial_pos": [
+                350.1437683105469,
+                419.63067626953125
+            ],
+            "last_pos": [
+                465.571044921875,
+                416.42474365234375
+            ],
+            "frames_present": [
+                3,
+                6,
+                9,
+                15,
+                63,
+                66,
+                84,
+                87,
+                90,
+                93,
+                96,
+                102,
+                105
+            ],
+            "last_confidence": 0.679053008556366
+        },
+        {
+            "id": 2,
+            "label": "person",
+            "initial_pos": [
+                1134.16552734375,
+                438.61444091796875
+            ],
+            "last_pos": [
+                1134.16552734375,
+                438.61444091796875
+            ],
+            "frames_present": [
+                3
+            ],
+            "last_confidence": 0.6493414640426636
+        },
+        {
+            "id": 3,
+            "label": "truck",
+            "initial_pos": [
+                66.28022766113281,
+                407.50537109375
+            ],
+            "last_pos": [
+                170.6733856201172,
+                408.93109130859375
+            ],
+            "frames_present": [
+                6,
+                12,
+                15,
+                18
+            ],
+            "last_confidence": 0.6585652828216553
+        },
+        {
+            "id": 4,
+            "label": "person",
+            "initial_pos": [
+                1220.283447265625,
+                440.3764953613281
+            ],
+            "last_pos": [
+                1220.283447265625,
+                440.3764953613281
+            ],
+            "frames_present": [
+                9
+            ],
+            "last_confidence": 0.6605813503265381
+        },
+        {
+            "id": 5,
+            "label": "suitcase",
+            "initial_pos": [
+                880.025146484375,
+                277.9187316894531
+            ],
+            "last_pos": [
+                834.5689697265625,
+                257.50946044921875
+            ],
+            "frames_present": [
+                18,
+                24,
+                27,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48,
+                51,
+                54,
+                57,
+                60,
+                63,
+                66,
+                69,
+                72,
+                75,
+                81,
+                84,
+                87,
+                90,
+                93,
+                96,
+                99,
+                102,
+                105,
+                108,
+                111,
+                114,
+                117,
+                120,
+                123,
+                132,
+                135,
+                138,
+                141,
+                144,
+                147,
+                150,
+                153,
+                156,
+                159,
+                162,
+                168,
+                171,
+                174,
+                177,
+                180,
+                183,
+                186,
+                189
+            ],
+            "last_confidence": 0.7100450992584229
+        },
+        {
+            "id": 6,
+            "label": "car",
+            "initial_pos": [
+                37.2218017578125,
+                414.3212890625
+            ],
+            "last_pos": [
+                408.981201171875,
+                417.8565368652344
+            ],
+            "frames_present": [
+                21,
+                24,
+                27,
+                30,
+                36,
+                39,
+                42,
+                45,
+                48,
+                51,
+                54,
+                57,
+                60,
+                69,
+                72,
+                75,
+                78,
+                81,
+                87,
+                90,
+                93,
+                96,
+                99
+            ],
+            "last_confidence": 0.7454138994216919
+        },
+        {
+            "id": 7,
+            "label": "car",
+            "initial_pos": [
+                1065.3768310546875,
+                439.3325500488281
+            ],
+            "last_pos": [
+                1240.4339599609375,
+                414.12176513671875
+            ],
+            "frames_present": [
+                21,
+                24,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48,
+                51,
+                54,
+                57,
+                60,
+                63,
+                66,
+                69,
+                72,
+                75,
+                78,
+                81,
+                96,
+                99,
+                102,
+                105,
+                108,
+                111,
+                117,
+                120,
+                123,
+                126,
+                129,
+                135,
+                138,
+                141,
+                147,
+                150,
+                153,
+                156,
+                159,
+                162,
+                168
+            ],
+            "last_confidence": 0.6979049444198608
+        },
+        {
+            "id": 8,
+            "label": "car",
+            "initial_pos": [
+                30.332914352416992,
+                410.7745361328125
+            ],
+            "last_pos": [
+                262.96112060546875,
+                412.80560302734375
+            ],
+            "frames_present": [
+                36,
+                39,
+                42,
+                45,
+                48,
+                51,
+                54,
+                57,
+                60,
+                63,
+                66,
+                69,
+                75,
+                78,
+                81,
+                84,
+                180,
+                186,
+                189
+            ],
+            "last_confidence": 0.6605270504951477
+        },
+        {
+            "id": 9,
+            "label": "car",
+            "initial_pos": [
+                126.97802734375,
+                412.3268737792969
+            ],
+            "last_pos": [
+                258.4215393066406,
+                415.66571044921875
+            ],
+            "frames_present": [
+                48,
+                51,
+                54,
+                57,
+                60,
+                63,
+                66
+            ],
+            "last_confidence": 0.7126255631446838
+        },
+        {
+            "id": 10,
+            "label": "car",
+            "initial_pos": [
+                35.38605499267578,
+                421.1781005859375
+            ],
+            "last_pos": [
+                144.99588012695312,
+                409.505126953125
+            ],
+            "frames_present": [
+                63,
+                66,
+                69,
+                72,
+                165,
+                174,
+                177
+            ],
+            "last_confidence": 0.7446447014808655
+        },
+        {
+            "id": 11,
+            "label": "car",
+            "initial_pos": [
+                1029.541748046875,
+                424.36810302734375
+            ],
+            "last_pos": [
+                1118.1021728515625,
+                414.39715576171875
+            ],
+            "frames_present": [
+                93,
+                96,
+                99,
+                102,
+                105,
+                108,
+                141,
+                144,
+                153,
+                159
+            ],
+            "last_confidence": 0.6127169728279114
+        },
+        {
+            "id": 12,
+            "label": "car",
+            "initial_pos": [
+                1063.9100341796875,
+                412.2381896972656
+            ],
+            "last_pos": [
+                1075.185302734375,
+                415.52850341796875
+            ],
+            "frames_present": [
+                114,
+                120,
+                132,
+                135,
+                138,
+                150,
+                153,
+                156
+            ],
+            "last_confidence": 0.7081351280212402
+        },
+        {
+            "id": 13,
+            "label": "motorcycle",
+            "initial_pos": [
+                82.06376647949219,
+                483.7548828125
+            ],
+            "last_pos": [
+                82.06376647949219,
+                483.7548828125
+            ],
+            "frames_present": [
+                117
+            ],
+            "last_confidence": 0.8283565640449524
+        },
+        {
+            "id": 14,
+            "label": "car",
+            "initial_pos": [
+                1223.07080078125,
+                417.7767333984375
+            ],
+            "last_pos": [
+                1253.607177734375,
+                417.2390441894531
+            ],
+            "frames_present": [
+                117,
+                120,
+                123
+            ],
+            "last_confidence": 0.6288636922836304
+        },
+        {
+            "id": 15,
+            "label": "motorcycle",
+            "initial_pos": [
+                163.3594512939453,
+                475.42327880859375
+            ],
+            "last_pos": [
+                163.3594512939453,
+                475.42327880859375
+            ],
+            "frames_present": [
+                120
+            ],
+            "last_confidence": 0.8095694184303284
+        },
+        {
+            "id": 16,
+            "label": "person",
+            "initial_pos": [
+                159.74301147460938,
+                424.9932556152344
+            ],
+            "last_pos": [
+                159.74301147460938,
+                424.9932556152344
+            ],
+            "frames_present": [
+                120
+            ],
+            "last_confidence": 0.6936469078063965
+        },
+        {
+            "id": 17,
+            "label": "person",
+            "initial_pos": [
+                245.0389404296875,
+                429.1198425292969
+            ],
+            "last_pos": [
+                245.0389404296875,
+                429.1198425292969
+            ],
+            "frames_present": [
+                123
+            ],
+            "last_confidence": 0.7278895378112793
+        },
+        {
+            "id": 18,
+            "label": "car",
+            "initial_pos": [
+                895.9810791015625,
+                460.24505615234375
+            ],
+            "last_pos": [
+                934.998046875,
+                451.10455322265625
+            ],
+            "frames_present": [
+                123,
+                129
+            ],
+            "last_confidence": 0.6797829866409302
+        },
+        {
+            "id": 19,
+            "label": "motorcycle",
+            "initial_pos": [
+                240.945556640625,
+                475.313720703125
+            ],
+            "last_pos": [
+                382.16510009765625,
+                471.68023681640625
+            ],
+            "frames_present": [
+                123,
+                126,
+                129
+            ],
+            "last_confidence": 0.6635462045669556
+        }
+    ],
+    "vlm_caption": "```json\n{\n  \"Features\": [\n    {\n      \"tracker\": \"Delivery Rider\",\n      \"description\": \"A young man wearing a grey t-shirt and black shorts, carrying a large green delivery backpack with the 'Grak Food' logo. He is riding an electric scooter and appears to be navigating a city street.\",\n      \"location\": \"On a city road, likely in Southeast Asia.\"\n    },\n    {\n      \"tracker\": \"Cars\",\n      \"description\": \"Multiple cars of various colors (white, black, yellow) are visible on the road. They appear to be in normal traffic flow.\",\n      \"location\": \"On a city street.\"\n    },\n    {\n      \"tracker\": \"Personal Mobility Device (PMD)\",\n      \"description\": \"An electric scooter is being used by the delivery rider. It has lights and appears to be in good working condition.\",\n      \"location\": \"On a city street.\"\n    },\n    {\n      \"tracker\": \"Motorcycles\",\n      \"description\": \"Several motorcycles are visible in the background, indicating a busy urban environment.\",\n      \"location\": \"On a city street.\"\n    }\n  ],\n  \"Video Summary\": \"This video clip shows a delivery rider on an electric scooter navigating a busy city street, likely in Southeast Asia, with multiple cars and other vehicles present.\"\n}\n```"
+}

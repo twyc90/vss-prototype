@@ -1,0 +1,266 @@
+{
+    "chunk_path": "./out/video_chunks/CCTV9|VID_GEN7_chunk_1.mp4",
+    "motion_detected": true,
+    "objects": [
+        {
+            "id": 0,
+            "label": "person",
+            "initial_pos": [
+                409.68414306640625,
+                216.03477478027344
+            ],
+            "last_pos": [
+                345.04742431640625,
+                256.3126220703125
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                9,
+                12,
+                15,
+                18,
+                21,
+                24,
+                27,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48
+            ],
+            "last_confidence": 0.8927397131919861
+        },
+        {
+            "id": 1,
+            "label": "person",
+            "initial_pos": [
+                581.96923828125,
+                299.00732421875
+            ],
+            "last_pos": [
+                511.2330017089844,
+                288.9298095703125
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                9,
+                12,
+                15,
+                18,
+                21,
+                24,
+                27,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48
+            ],
+            "last_confidence": 0.8913006782531738
+        },
+        {
+            "id": 2,
+            "label": "person",
+            "initial_pos": [
+                45.19664001464844,
+                214.202392578125
+            ],
+            "last_pos": [
+                263.545654296875,
+                242.08255004882812
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                9,
+                12,
+                15,
+                18,
+                21,
+                24,
+                27,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48
+            ],
+            "last_confidence": 0.852843701839447
+        },
+        {
+            "id": 3,
+            "label": "person",
+            "initial_pos": [
+                269.28424072265625,
+                230.7401580810547
+            ],
+            "last_pos": [
+                273.43951416015625,
+                235.3216552734375
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                9,
+                12,
+                15,
+                18,
+                21,
+                24,
+                42,
+                45
+            ],
+            "last_confidence": 0.846095621585846
+        },
+        {
+            "id": 4,
+            "label": "person",
+            "initial_pos": [
+                184.62831115722656,
+                223.36524963378906
+            ],
+            "last_pos": [
+                187.92401123046875,
+                249.16404724121094
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                9,
+                12,
+                15,
+                18,
+                21,
+                48
+            ],
+            "last_confidence": 0.8228699564933777
+        },
+        {
+            "id": 5,
+            "label": "person",
+            "initial_pos": [
+                715.6771240234375,
+                252.91848754882812
+            ],
+            "last_pos": [
+                714.4733276367188,
+                283.76190185546875
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                9,
+                12,
+                18,
+                21,
+                24,
+                27,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48
+            ],
+            "last_confidence": 0.7790518999099731
+        },
+        {
+            "id": 6,
+            "label": "umbrella",
+            "initial_pos": [
+                686.5896606445312,
+                82.87129974365234
+            ],
+            "last_pos": [
+                678.7293701171875,
+                86.15721893310547
+            ],
+            "frames_present": [
+                0,
+                3,
+                6,
+                15,
+                18,
+                21
+            ],
+            "last_confidence": 0.6400344371795654
+        },
+        {
+            "id": 7,
+            "label": "person",
+            "initial_pos": [
+                470.93341064453125,
+                236.8756866455078
+            ],
+            "last_pos": [
+                456.30572509765625,
+                239.78892517089844
+            ],
+            "frames_present": [
+                3,
+                6,
+                9,
+                12
+            ],
+            "last_confidence": 0.6040666699409485
+        },
+        {
+            "id": 8,
+            "label": "bottle",
+            "initial_pos": [
+                553.5728759765625,
+                441.02703857421875
+            ],
+            "last_pos": [
+                569.4210815429688,
+                454.0623779296875
+            ],
+            "frames_present": [
+                12,
+                24,
+                39
+            ],
+            "last_confidence": 0.782133162021637
+        },
+        {
+            "id": 9,
+            "label": "person",
+            "initial_pos": [
+                33.744876861572266,
+                222.92733764648438
+            ],
+            "last_pos": [
+                41.23617172241211,
+                240.90023803710938
+            ],
+            "frames_present": [
+                24,
+                27,
+                30,
+                33,
+                36,
+                39,
+                42,
+                45,
+                48
+            ],
+            "last_confidence": 0.8328287601470947
+        }
+    ],
+    "vlm_caption": "```json\n{\n  \"Features\": [\n    {\n      \"tracker\": \"Young Girl\",\n      \"description\": \"A young girl wearing a bright red dress and carrying a blue water bottle on her shoulder. She is looking directly at the camera.\",\n      \"location\": \"Standing in a pedestrian area, possibly walking.\"\n    },\n    {\n      \"tracker\": \"People in Background\",\n      \"description\": \"Multiple individuals are present in the background, walking and standing. They are wearing various casual clothing.\",\n      \"location\": \"Pedestrian area, walking in the same direction as the girl.\"\n    },\n    {\n      \"tracker\": \"Water Bottle\",\n      \"description\": \"A blue plastic water bottle is being carried by the young girl.\",\n      \"location\": \"Attached to the shoulder strap of the girl's dress.\"\n    }\n  ],\n  \"Video Summary\": \"This video clip shows a young girl in a red dress walking in a pedestrian area with other people around, likely in an outdoor public space.\"\n}\n```"
+}
