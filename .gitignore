@@ -10,3 +10,4 @@ wheels/
 .venv
 out/
 data/videos_bckup
+out_backup/
