@@ -259,10 +259,6 @@ def display_video_results(results_list):
                             st.markdown(f"**Caption:** `{caption_str}`")
                         st.markdown(f"**Score:** <span style='color:{'green' if score>0 else 'red'}; font-weight:bold;'>{score:.4f}</span>", unsafe_allow_html=True)
                         st.markdown(f"**Chunk Path:** `{best_chunk['metadata'].get('chunk_path', 'N/A')}`")
-                        # st.markdown(f"**Chunk:** `{os.path.basename(path)}` | "
-                        #         f"**Score:** <span style='color:{score_color}; font-weight:bold;'>{best_score:.4f}</span> | "
-                        #         f"**Summary:** {summary}", unsafe_allow_html=True)
-                        
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide")

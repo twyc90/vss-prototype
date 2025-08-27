@@ -13,7 +13,9 @@ from ultralytics import YOLO
 import torch
 import json
 import base64
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
+import asyncio  # Added for asynchronous operations
+from concurrent.futures import ProcessPoolExecutor # Added for concurrent processing
 
 # --------------
 # --- Config ---
@@ -75,6 +77,7 @@ VLM_API_KEY = "NA"
 # VLM_MODEL_NAME = "google/gemma-3-12b"
 VLM_MODEL_NAME = "google/gemma-3-27b"
 LLM_MODEL_NAME = "qwen/qwen2.5-vl-7b"
+# client = OpenAI(base_url=VLM_API_BASE, api_key=VLM_API_KEY)
 client = OpenAI(base_url=VLM_API_BASE, api_key=VLM_API_KEY)
 
 # ------------------------
@@ -220,8 +223,8 @@ def detect_and_track_objects(chunk_path, model):
                             'initial_pos': (center_x, center_y),
                             'last_pos': (center_x, center_y),
                             'frames_present': [frame_idx],
+                            'last_confidence': confidence
                         }
-                        tracked_objects[display_id]['last_confidence'] = confidence
                         next_object_id += 1
 
                     label = f"ID {display_id}: {class_name} {box.conf[0]:.2f}"
@@ -276,6 +279,18 @@ def vlm_caption(chunk_path, client):
         _, buffer = cv2.imencode(".jpg", frame)
         base64_frames.append(base64.b64encode(buffer).decode("utf-8"))
     try:
+        cv_metadata = []
+        chunk_filename = chunk_path.split(ANNOTATED_CHUNK_DIR+'/')[1]
+        metadata_filename = chunk_filename.replace(os.path.splitext(chunk_filename)[1], '.json')
+        metadata_path = os.path.join(OUTPUT_METADATA_DIR, metadata_filename)
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        objects = metadata.get("objects", [])
+        if objects:
+            for obj in objects:
+                label = obj.get('label', 'N/A')
+                confidence = obj.get('last_confidence')
+                cv_metadata.append(f"Object ID {obj.get('id', 'N/A')}: {label}, Confidence: {confidence:.2f}")
         messages = [
             {
                 "role": "user",
@@ -288,47 +303,53 @@ def vlm_caption(chunk_path, client):
         "2. Identify all objects like car, personal mobility devices (PMD), bicycle, scooter, etc and record their color and features.\n"
         "2. Identify suspicious objects like unclaimed bag in the middle of a bus stop that looked suspicious, etc and provide the description\n"
         "3. Record the likely location of the video clip, such as bus stop, shopping mall, restaurant, MRT, MBS, etc\n"
-        "4. Generate a concise one sentence caption for the video clip.\n"
+        "4. Fill in the Object ID, label and confidence based on the bounding box CV metadata if available\n"
+        "5. Generate a concise one sentence caption for the video clip.\n"
         "Return your result in a valid JSON output as per below:\n"
         '''
         {
         "Features": [
         {
-        "tracker": "Young Man (ID 1)",
+        "tracker": "Young Man (Object ID <id>: <label>, Confidence: <confidence>)",
         "description": "A young man wearing a backpack, jeans, and a light-colored shirt. He appears to be looking at his phone. There is a red color handbag on the floor near to him.",
         "location": "Standing near the edge of a bus stop shelter.",
         },
         {
-        "tracker": "Bus (ID 9)",
+        "tracker": "Bus (Object ID <id>: <label>, Confidence: <confidence>)",
         ""description": "A green color SG bus with number 298",
         "location": "On the road",
         },
         {
-        "tracker": "Car (ID 12)",
+        "tracker": "Car (Object ID <id>: <label>, Confidence: <confidence>)",
         ""description": "A bright yellow color Honda civic",
         "location": "On the road",
         },
         {
-        "tracker": "Elderly Woman (ID 32)",
+        "tracker": "Elderly Woman (Object ID <id>: <label>, Confidence <confidence>)",
         ""description": "An elderly woman wearing a dark jacket and seated on the bus stop bench.",
         "location": "Seated on the bus stop bench."
         }],
         "Video Summary": 
         "this video clip is in a restaurant setting, there are two individual in the video."
-        }'''
+        }\n'''
+        "        ------CHUNK DATA START HERE------\n"
+        "        CV METADATA:\n        "
+        f"{'\n        '.join(cv_metadata)}"
+
                     )},
                     *[{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_str}"}} for img_str in base64_frames]
                 ]
             },
         ]
+        print(messages[0]['content'][0]['text'])
         response = client.chat.completions.create(
             model=VLM_MODEL_NAME,
             messages=messages,
             max_tokens=2048,
         )
         caption = response.choices[0].message.content
-        # print(f"-"*25)
-        # print(f"Generated Caption: {caption}")
+        print(f"-"*25)
+        print(f"Generated Caption: {caption}")
     except Exception as e:
         print(f"Error during OpenAI API call: {e}")
         caption="Caption generation failed."
@@ -343,7 +364,7 @@ def vlm_caption(chunk_path, client):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    embedding = embedding_model.encode(EMBEDDING_MODEL_NAME, normalize_embeddings=True).tolist()
+    embedding = embedding_model.encode(caption, normalize_embeddings=True).tolist()
     if embedding:
         try:
             collection.upsert(
@@ -406,7 +427,7 @@ def create_aggregated_summary(video_path, client):
     )
     messages = [{"role": "user", "content": aggregation_prompt}]
     response = client.chat.completions.create(
-        model=VLM_MODEL_NAME, messages=messages, max_tokens=1024
+        model=LLM_MODEL_NAME, messages=messages, max_tokens=1024
     )
     final_summary = response.choices[0].message.content
     summary_path = os.path.join(OUTPUT_METADATA_DIR, f"{video_name.split('.')[0]}.json")
@@ -449,7 +470,7 @@ for chunk_filename in os.listdir(ANNOTATED_CHUNK_DIR):
     if chunk_filename.lower().endswith((".mp4", ".avi", ".mov")):
         chunk_path = os.path.join(ANNOTATED_CHUNK_DIR, chunk_filename)
         vlm_caption(chunk_path, client)
-        
+
 ## LLM Agg Pipeline
 for filename in os.listdir(DATA_DIR):
     if filename.lower().endswith((".mp4", ".avi", ".mov")):
