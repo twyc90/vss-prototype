@@ -6,25 +6,117 @@ import cv2
 import base64
 import json, ast
 from FlagEmbedding import FlagReranker
+from PIL import Image
+from transformers import AutoTokenizer, AutoProcessor, AutoModel, XCLIPModel
+import torch
+import numpy as np
+from PIL import Image
+import tempfile
 
-# --- Configuration ---
+# --------------
+# --- CONFIG ---
+# --------------
 DATA_DIR = "./data/videos"
 OUTPUT_CHROMA_DIR = "./out/chroma_db"
 COLLECTION_NAME = "chunk_captions"
-EMBEDDING_MODEL_NAME = 'BAAI/bge-m3'
+# EMBEDDING_MODEL_NAME = 'BAAI/bge-m3'
+EMBEDDING_MODEL_NAME = "BAAI/BGE-VL-base"
 RERANKER_MODEL_NAME = 'BAAI/bge-reranker-large'
-# RERANKER_MODEL_NAME = 'BAAI/bge-reranker-v2-gemma'
 ANNOTATED_CHUNK_DIR = "./out/video_chunks_cv"
 OUTPUT_METADATA_DIR = "./out/metadata"
 VIDEO_COLLECTION_NAME = "video_captions"
 
+# -------------------------------------
+# --- Device selection (MPS on Mac) ---
+# -------------------------------------
+if torch.backends.mps.is_available():
+    device = "mps"
+elif torch.cuda.is_available():
+    device = "cuda"
+else:
+    device = "cpu"
+
+# ------------------------
+# --- Emb Model Config ---
+# ------------------------
+# def encode_text(texts, processor, model, device="cpu", normalize=True):
+#     inputs = processor(texts, padding=True, truncation=True, return_tensors="pt").to(device)
+#     with torch.no_grad():
+#         outputs = model(**inputs)
+#         embeddings = outputs.last_hidden_state.mean(dim=1) # mean pooling
+#     embeddings = embeddings.cpu().numpy()
+#     if normalize:
+#         embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+#     return embeddings.tolist()
+
+def encode_text(texts, processor, model, device="cpu", normalize=True, max_length=77):
+    embeddings = []
+    try:
+        for text in texts:
+            tokens = processor(text=text, return_tensors="pt", add_special_tokens=True)
+            input_ids = tokens["input_ids"][0]
+            if len(input_ids) <= max_length:
+                print('normal encode')
+                inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
+                with torch.no_grad():
+                    outputs = model.get_text_features(**inputs)
+                emb = outputs.cpu().numpy()
+            else:
+                print('chunk and mean encode')
+                chunks = [input_ids[i:i+max_length] for i in range(0, len(input_ids), max_length)]
+                chunk_embs = []
+                for chunk in chunks:
+                    inputs = {"input_ids": chunk.unsqueeze(0).to(device)}
+                    with torch.no_grad():
+                        outputs = model.get_text_features(**inputs)
+                    chunk_embs.append(outputs.cpu().numpy())
+                emb = np.mean(chunk_embs, axis=0)
+            if normalize:
+                emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return emb.tolist()
+
+
+def encode_image(images, processor, model, device="cpu", normalize=True):
+    try:
+        inputs = processor(images=images, return_tensors="pt").to(device)
+        with torch.no_grad():
+            outputs = model.get_image_features(**inputs)
+        embeddings = outputs.cpu().numpy()
+        if normalize:
+            embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return embeddings.tolist()
+
+
+def encode_video(pil_frames, processor, model, device="cpu", normalize=True):
+    try:
+        image_embeddings = encode_image(pil_frames, processor, embedding_model, device=device)
+        if len(image_embeddings)>1:
+            avg_image_embedding = np.mean(image_embeddings, axis=0)
+            avg_image_embedding = avg_image_embedding / np.linalg.norm(avg_image_embedding)
+            avg_image_embedding = avg_image_embedding.tolist()
+        else:
+            avg_image_embedding = image_embeddings[0]
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return avg_image_embedding
+
+
+# --------------------------------------
 # --- Caching Models for Performance ---
+# --------------------------------------
 @st.cache_resource
 def load_models():
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    # embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    processor = AutoProcessor.from_pretrained(EMBEDDING_MODEL_NAME)
+    embedding_model = AutoModel.from_pretrained(EMBEDDING_MODEL_NAME).to(device)
+    embedding_model.eval()
     reranker_model = FlagReranker(RERANKER_MODEL_NAME, use_fp16=True)
     print("Models loaded successfully.")
-    return embedding_model, reranker_model
+    return embedding_model, reranker_model, processor
 
 @st.cache_resource
 def load_chroma_collection():
@@ -37,31 +129,70 @@ def load_chroma_collection():
     print("Collection loaded successfully.")
     return collection, video_collection
 
-def search_and_rerank(query, embedding_model, reranker_model, collection, top_n=25, rerank_top_k=5):
-    if not query:
-        return []
-    query_embedding = embedding_model.encode(query, normalize_embeddings=True).tolist()
-    initial_results = collection.query(
+
+def search_and_rerank(query_text=None, query_image=None, query_video=None, processor=None, embedding_model=None, reranker_model=None, collection=None, top_n=50, rerank_top_k=5):
+    if query_text is not None:
+        type='text'
+    elif query_image is not None:
+        type='image'
+    elif query_video is not None:
+        type='image'
+
+    query_embedding = []
+    if query_text:
+        emb_text = encode_text([query_text], processor, embedding_model, device=device)[0]
+        query_embedding = emb_text
+    elif query_image:
+        img = Image.open(query_image)
+        emb_image = encode_image([img], processor, embedding_model, device=device)[0]
+        query_embedding = emb_image
+    elif query_video:
+        cap = cv2.VideoCapture(query_video)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        all_frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            all_frames.append(frame)
+        cap.release()
+        if not all_frames: 
+            return "No frames extracted for captioning."
+        num_frames = len(all_frames)
+        indices = np.linspace(0, num_frames - 1, num=min(num_frames, 8), dtype=int)
+        sampled_frames = [all_frames[i] for i in indices]
+        pil_frames = [Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) for frame in sampled_frames]
+        query_embedding = encode_video(pil_frames, processor, embedding_model, device=device)
+
+    search_results = collection.query(
         query_embeddings=[query_embedding],
         n_results=top_n,
-        include=["metadatas", "documents", "embeddings", "distances"]
+        include=['metadatas','documents','embeddings','distances'],
+        # where={'type':type}
     )
-    if not initial_results['ids'][0]:
-        return []
+    if type=='text':
+        rerank_pairs = []
+        for metadata in search_results['metadatas'][0]:
+            rerank_pairs.append([query_text, metadata.get('caption', '')])
+        rerank_scores = reranker_model.compute_score(rerank_pairs)
+        rerank_scores = torch.sigmoid(torch.tensor(rerank_scores)).tolist()
+        reranked_chunks = []
+        for i, meta in enumerate(search_results['metadatas'][0]):
+            reranked_chunks.append({
+                'metadata': meta,
+                'rerank_score': rerank_scores[i]
+            })
+        reranked_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
+        top_chunks = reranked_chunks[:rerank_top_k]
+    elif type=='image':
+        matched_chunks = []
+        for meta, distance in zip(search_results['metadatas'][0], search_results['distances'][0]):
+            matched_chunks.append({
+                'metadata': meta,
+                'rerank_score': 1-distance
+            })
+        matched_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
+        top_chunks = matched_chunks[:rerank_top_k]
 
-    rerank_pairs = []
-    for metadata in initial_results['metadatas'][0]:
-        rerank_pairs.append([query, metadata.get('caption', '')])
-    rerank_scores = reranker_model.compute_score(rerank_pairs)
-    reranked_chunks = []
-    for i, meta in enumerate(initial_results['metadatas'][0]):
-        reranked_chunks.append({
-            'metadata': meta,
-            'rerank_score': rerank_scores[i]
-        })
-    reranked_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
-    top_chunks = reranked_chunks[:rerank_top_k]
-    # return top_chunks
     video_results = {}
     for chunk in top_chunks:
         chunk_path = chunk['metadata'].get('chunk_path', '')
@@ -86,12 +217,14 @@ def browse_collection(collection, limit=30):
         limit=limit,
         include=["metadatas"]
     )
-    if not results['ids']:
-        return []
     formatted_results = []
-    for meta in results['metadatas']:
-        formatted_results.append({'metadata': meta})
+    ids = set()
+    for id, meta in zip(results['ids'], results['metadatas']):
+        if meta['video_name'] not in ids:
+            formatted_results.append({'metadata': meta})
+        ids.add(meta['video_name'])
     return formatted_results
+
 
 def parse_json(json_string):
     json_string = json_string.replace('```json','').replace('```','')
@@ -103,6 +236,7 @@ def parse_json(json_string):
         except Exception as e:
             json_obj = {}
     return json_obj
+
 
 def display_results(results_list):
     if not results_list:
@@ -132,7 +266,7 @@ def display_results(results_list):
                 st.markdown(f"**Caption:** `{caption_str}`")
             if 'rerank_score' in result:
                 score = result['rerank_score']
-                color = "green" if score > 0 else "red"
+                color = "green" if score > 0.5 else "red"
                 st.markdown(
                     f"""<p><strong>Re-rank Score: </strong>
                         <span style='color:{color}; font-weight:bold;'>{score:.4f}</span>
@@ -159,6 +293,7 @@ def display_results(results_list):
                         except Exception as e:
                             st.error(f"Could not read metadata file: {e}")
 
+
 def display_summary_results(results_list):
     if not results_list:
         st.warning("No video summaries found in the collection.")
@@ -180,6 +315,7 @@ def display_summary_results(results_list):
             st.subheader(f"🎬 Summary for: `{video_name}`")
             st.markdown(summary)
 
+
 def display_video_results(results_list):
     if not results_list:
         st.warning("No results found.")
@@ -192,7 +328,7 @@ def display_video_results(results_list):
         all_matching_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
         best_chunk = all_matching_chunks[0]
         st.markdown("---")
-        score_color = "green" if best_score > 0 else "red"
+        score_color = "green" if best_score > 0.5 else "red"
         st.header(f"Rank {i+1}: {video_name}")
         st.markdown(f"**Relevance Score:** <span style='color:{score_color}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
         st.info(f"Found {len(all_matching_chunks)} relevant chunk(s) in this video.")
@@ -215,7 +351,7 @@ def display_video_results(results_list):
                     st.text(f"- {' | '.join(str(v) for v in feature.values())}")
             else:
                 st.markdown(f"**Caption:** `{caption_str}`")
-            st.markdown(f"**Score:** <span style='color:{'green' if best_score>0 else 'red'}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
+            st.markdown(f"**Score:** <span style='color:{'green' if best_score>0.5 else 'red'}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
             st.markdown(f"**Chunk Path:** `{best_chunk['metadata'].get('chunk_path', 'N/A')}`")
             chunk_path = best_chunk['metadata'].get('chunk_path', 'N/A')
             if chunk_path:
@@ -239,13 +375,13 @@ def display_video_results(results_list):
 
         if len(all_matching_chunks) > 0:
             with st.expander("View all relevant chunks in this video"):
-                for other_chunk in all_matching_chunks[:]:
+                for other_chunk in all_matching_chunks:
                     score = other_chunk['rerank_score']
                     path = other_chunk['metadata'].get('chunk_path', 'N/A')
                     summary = parse_json(other_chunk['metadata'].get('caption', '{}')).get('Video Summary', 'N/A')
                     col1, col2 = st.columns([1, 2])
                     with col1:
-                        video_path = best_chunk['metadata'].get('chunk_path', '')
+                        video_path = other_chunk['metadata'].get('chunk_path', '')
                         if os.path.exists(video_path):
                             st.video(video_path)
                         else:
@@ -259,6 +395,7 @@ def display_video_results(results_list):
                             st.markdown(f"**Caption:** `{caption_str}`")
                         st.markdown(f"**Score:** <span style='color:{'green' if score>0 else 'red'}; font-weight:bold;'>{score:.4f}</span>", unsafe_allow_html=True)
                         st.markdown(f"**Chunk Path:** `{best_chunk['metadata'].get('chunk_path', 'N/A')}`")
+
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide")
@@ -274,7 +411,7 @@ with _col2:
 
 
 # Load models and collection
-embedding_model, reranker_model = load_models()
+embedding_model, reranker_model, processor = load_models()
 collection, video_collection = load_chroma_collection()
 
 # --- Create Tabs ---
@@ -282,11 +419,28 @@ tab1, tab2, tab3 = _col2.tabs(["🔎 Search Chunk by Query", "📚 Browse Chunks
 
 # --- Search Tab ---
 with tab1:
-    query = st.text_input("Enter your search query:", "Group of male and female subjects walking together. One of them wearing a T-shirt with strawberry motifs.")
+    # query = st.text_input("Enter your search query:", "Group of male and female subjects walking together. One of them wearing a T-shirt with strawberry motifs.")
+    query_mode = st.radio("Choose query type:", ["text", "image", "video"])
+    query_text, query_image, query_video = None, None, None
+
+    if query_mode in ["text"]:
+        query_text = st.text_input("Enter your search query:", "Group of male and female subjects walking together. One of them wearing a T-shirt with strawberry motifs.")
+
+    elif query_mode in ["image"]:
+        uploaded_file = st.file_uploader("Upload an image:", type=["jpg", "png", "jpeg"])
+        if uploaded_file is not None:
+            query_image = uploaded_file
+
+    elif query_mode in ["video"]:
+        uploaded_file = st.file_uploader("Upload an video:", type=["mp4"])
+        if uploaded_file is not None:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+                temp_file.write(uploaded_file.read())
+                query_video = temp_file.name
+            
     if st.button("Search"):
         with st.spinner("Searching and reranking..."):
-            search_results = search_and_rerank(query, embedding_model, reranker_model, collection)
-            # display_results(search_results)
+            search_results = search_and_rerank(query_text, query_image, query_video, processor, embedding_model, reranker_model, collection)
             display_video_results(search_results)
 
 # --- Browse Chunk Tab ---
@@ -296,6 +450,7 @@ with tab2:
         with st.spinner("Fetching collection..."):
             browse_results = browse_collection(collection, limit=30)
             display_results(browse_results)
+
 
 # --- Browse Video Summaries Tab ---
 with tab3:

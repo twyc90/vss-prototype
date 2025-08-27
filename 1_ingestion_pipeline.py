@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import json, ast
 from sentence_transformers import SentenceTransformer
-from transformers import AutoProcessor, AutoModel, XCLIPModel
+from transformers import AutoTokenizer, AutoProcessor, AutoModel, XCLIPModel
 import os
 import math
 import uuid
@@ -16,6 +16,7 @@ import base64
 from openai import OpenAI, AsyncOpenAI
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
+from PIL import Image
 
 # --------------
 # --- Config ---
@@ -58,9 +59,11 @@ video_collection = client.get_or_create_collection(name=VIDEO_COLLECTION_NAME, m
 # ------------------------
 # --- Emb Model Config ---
 # ------------------------
-EMBEDDING_MODEL_NAME = 'BAAI/bge-m3'
-# EMBEDDING_MODEL_NAME = 'BAAI/BGE-VL-base'
-embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+# EMBEDDING_MODEL_NAME = 'BAAI/bge-m3'
+# embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+EMBEDDING_MODEL_NAME = 'BAAI/BGE-VL-base'
+processor = AutoProcessor.from_pretrained(EMBEDDING_MODEL_NAME)
+embedding_model = AutoModel.from_pretrained(EMBEDDING_MODEL_NAME).to(device)
 
 # ------------------------------
 # --- YOLO Obj Detect Config ---
@@ -75,8 +78,8 @@ CONFIDENCE_THRESHOLD = 0.6
 VLM_API_BASE = "http://localhost:1234/v1"
 VLM_API_KEY = "NA"
 # VLM_MODEL_NAME = "internvl3-14b-instruct"
-# VLM_MODEL_NAME = "google/gemma-3-12b"
-VLM_MODEL_NAME = "google/gemma-3-27b"
+VLM_MODEL_NAME = "google/gemma-3-12b"
+# VLM_MODEL_NAME = "google/gemma-3-27b"
 LLM_MODEL_NAME = "qwen/qwen2.5-vl-7b"
 # client = OpenAI(base_url=VLM_API_BASE, api_key=VLM_API_KEY)
 client = AsyncOpenAI(base_url=VLM_API_BASE, api_key=VLM_API_KEY)
@@ -84,6 +87,57 @@ client = AsyncOpenAI(base_url=VLM_API_BASE, api_key=VLM_API_KEY)
 # ------------------------
 # --- Helper Functions ---
 # ------------------------
+# def encode_text(texts, processor, model, device="cpu", normalize=True):
+#     inputs = processor(texts, padding=True, truncation=True, return_tensors="pt").to(device)
+#     with torch.no_grad():
+#         outputs = model(**inputs)
+#         embeddings = outputs.last_hidden_state.mean(dim=1) # mean pooling
+#     embeddings = embeddings.cpu().numpy()
+#     if normalize:
+#         embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+#     return embeddings.tolist()
+
+def encode_text(texts, processor, model, device="cpu", normalize=True, max_length=77):
+    embeddings = []
+    try:
+        for text in texts:
+            tokens = processor(text=text, return_tensors="pt", add_special_tokens=True)
+            input_ids = tokens["input_ids"][0]
+            if len(input_ids) <= max_length:
+                print('normal encode')
+                inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
+                with torch.no_grad():
+                    outputs = model.get_text_features(**inputs)
+                emb = outputs.cpu().numpy()
+            else:
+                print('chunk and mean encode')
+                chunks = [input_ids[i:i+max_length] for i in range(0, len(input_ids), max_length)]
+                chunk_embs = []
+                for chunk in chunks:
+                    inputs = {"input_ids": chunk.unsqueeze(0).to(device)}
+                    with torch.no_grad():
+                        outputs = model.get_text_features(**inputs)
+                    chunk_embs.append(outputs.cpu().numpy())
+                emb = np.mean(chunk_embs, axis=0)
+            if normalize:
+                emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return emb.tolist()
+
+def encode_image(images, processor, model, device="cpu", normalize=True):
+    try:
+        inputs = processor(images=images, return_tensors="pt").to(device)
+        with torch.no_grad():
+            outputs = model.get_image_features(**inputs)
+        embeddings = outputs.cpu().numpy()
+        if normalize:
+            embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return embeddings.tolist()
+
+
 def chunk_video(video_path):
     print(f"Chunking video: {video_path}")
     cap = cv2.VideoCapture(video_path)
@@ -177,10 +231,6 @@ def detect_and_track_objects(chunk_path, model):
         print(f"No motion detected in {chunk_path}. Skipping object tracking.")
         cap.release()
         out.release()
-        # metadata_filename = os.path.basename(chunk_path).replace(os.path.splitext(chunk_path)[1], '.json')
-        # metadata_path = os.path.join(OUTPUT_METADATA_DIR, metadata_filename)
-        # with open(metadata_path, 'w') as f:
-        #     json.dump(chunk_metadata, f, indent=4)
         os.remove(output_video_path)
         return
 
@@ -251,18 +301,6 @@ async def vlm_caption(chunk_path, client):
     print(f"Generating caption for: {chunk_path}")
     cap = cv2.VideoCapture(chunk_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    # base64_frames = []
-    # frame_count = 0
-    # while True:
-    #     ret, frame = cap.read()
-    #     if not ret:
-    #         break
-    #     _, buffer = cv2.imencode(".jpg", frame)
-    #     base64_frames.append(base64.b64encode(buffer).decode("utf-8"))
-    #     frame_count += 1
-    # cap.release()
-    # if not base64_frames:
-    #     return "No frames extracted for captioning."
 
     all_frames = []
     while True:
@@ -319,22 +357,22 @@ async def vlm_caption(chunk_path, client):
         {
         "Features": [
         {
-        "tracker": "(Object ID 0: person, Confidence: 0.851)",
+        "tracker": "Young man: (Object ID 0: person, Confidence: 0.851)",
         "description": "A young man wearing a backpack, jeans, and a light-colored shirt. He appears to be looking at his phone. There is a red color handbag on the floor near to him.",
         "location": "Standing near the edge of a bus stop shelter.",
         },
         {
-        "tracker": "(Object ID 1: bus, Confidence: 0.523)",
+        "tracker": "Bus: (Object ID 1: bus, Confidence: 0.523)",
         ""description": "A green color SG bus with number 298",
         "location": "On the road",
         },
         {
-        "tracker": "(Object ID 2: car, Confidence: 0.995)",
+        "tracker": "Car: (Object ID 2: car, Confidence: 0.995)",
         ""description": "A bright yellow color Honda civic",
         "location": "On the road",
         },
         {
-        "tracker": "(Object ID 3: person, Confidence 0.926)",
+        "tracker": "Elderly Woman: (Object ID 3: person, Confidence 0.926)",
         ""description": "An elderly woman wearing a dark jacket and seated on the bus stop bench.",
         "location": "Seated on the bus stop bench."
         }],
@@ -351,15 +389,15 @@ async def vlm_caption(chunk_path, client):
                 ]
             },
         ]
-        print(messages[0]['content'][0]['text'])
+        # print(messages[0]['content'][0]['text'])
         response = await client.chat.completions.create(
             model=VLM_MODEL_NAME,
             messages=messages,
             max_tokens=2048,
         )
         caption = response.choices[0].message.content
-        print(f"-"*25)
-        print(f"Generated Caption: {caption}")
+        # print(f"-"*25)
+        # print(f"Generated Caption: {caption}")
     except Exception as e:
         print(f"Error during OpenAI API call: {e}")
         caption="Caption generation failed."
@@ -374,13 +412,27 @@ async def vlm_caption(chunk_path, client):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    embedding = embedding_model.encode(caption, normalize_embeddings=True).tolist()
+    # embedding = embedding_model.encode(caption, normalize_embeddings=True).tolist()
+    embedding = encode_text([caption], processor, embedding_model, device=device)[0]
+    pil_frames = [Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) for frame in sampled_frames]
+    image_embeddings = encode_image(pil_frames, processor, embedding_model, device=device)
+    if len(image_embeddings)>1:
+        avg_image_embedding = np.mean(image_embeddings, axis=0)
+        avg_image_embedding = avg_image_embedding / np.linalg.norm(avg_image_embedding)
+        avg_image_embedding = avg_image_embedding.tolist()
+    else:
+        avg_image_embedding = image_embeddings[0]
+
     if embedding:
         try:
             collection.upsert(
-                embeddings=[embedding],
-                metadatas=[{"chunk_path": chunk_path, "caption": caption}],
-                ids=[chunk_filename] # Use filename as a unique ID
+                embeddings=[embedding] + [avg_image_embedding],
+                metadatas=[
+                    {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
+                    {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"image"}
+                    ],
+                documents=[caption, caption],
+                ids=[chunk_filename+"_text", chunk_filename+"_image"] # Use filename as a unique ID
             )
             print(f"Added embedding for {chunk_filename} to ChromaDB.")
         except Exception as e:
@@ -450,7 +502,8 @@ async def create_aggregated_summary(video_path, client):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    embedding = embedding_model.encode(final_summary, normalize_embeddings=True).tolist()
+    # embedding = embedding_model.encode(final_summary, normalize_embeddings=True).tolist()
+    embedding = encode_text([final_summary], processor, embedding_model, device=device)[0]
     if embedding:
         try:
             video_collection.upsert(
@@ -488,7 +541,6 @@ def cv_video_task():
 #     if filename.lower().endswith((".mp4", ".avi", ".mov")):
 #         video_path = os.path.join(DATA_DIR, filename)
 #         create_aggregated_summary(video_path, client)
-
 
 async def run_vlm_pipeline():
     tasks = []
