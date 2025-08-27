@@ -8,6 +8,7 @@ import json, ast
 from FlagEmbedding import FlagReranker
 
 # --- Configuration ---
+DATA_DIR = "./data/videos"
 OUTPUT_CHROMA_DIR = "./out/chroma_db"
 COLLECTION_NAME = "chunk_captions"
 EMBEDDING_MODEL_NAME = 'BAAI/bge-m3'
@@ -52,14 +53,31 @@ def search_and_rerank(query, embedding_model, reranker_model, collection, top_n=
     for metadata in initial_results['metadatas'][0]:
         rerank_pairs.append([query, metadata.get('caption', '')])
     rerank_scores = reranker_model.compute_score(rerank_pairs)
-    reranked_results = []
+    reranked_chunks = []
     for i, meta in enumerate(initial_results['metadatas'][0]):
-        reranked_results.append({
+        reranked_chunks.append({
             'metadata': meta,
             'rerank_score': rerank_scores[i]
         })
-    reranked_results.sort(key=lambda x: x['rerank_score'], reverse=True)
-    return reranked_results[:rerank_top_k]
+    reranked_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
+    top_chunks = reranked_chunks[:rerank_top_k]
+    # return top_chunks
+    video_results = {}
+    for chunk in top_chunks:
+        chunk_path = chunk['metadata'].get('chunk_path', '')
+        video_name = '.'.join([os.path.basename(chunk_path).split('_chunk_')[0],os.path.basename(chunk_path).split('.')[-1]])
+        video_path = os.path.join(DATA_DIR, video_name)
+        if video_name not in video_results:
+            video_results[video_name] = {
+                'video_name': video_name,
+                'best_score': chunk['rerank_score'],
+                'matching_chunks': [chunk]}
+        else:
+            video_results[video_name]['matching_chunks'].append(chunk)
+            if chunk['rerank_score'] > video_results[video_name]['best_score']:
+                video_results[video_name]['best_score'] = chunk['rerank_score']
+    final_list = sorted(video_results.values(), key=lambda x: x['best_score'], reverse=True)
+    return final_list
 
 def browse_collection(collection, limit=30):
     if not collection:
@@ -162,7 +180,89 @@ def display_summary_results(results_list):
             st.subheader(f"🎬 Summary for: `{video_name}`")
             st.markdown(summary)
 
+def display_video_results(results_list):
+    if not results_list:
+        st.warning("No results found.")
+        return
+    st.success(f"Found {len(results_list)} matching videos:")
+    for i, result in enumerate(results_list):
+        video_name = result['video_name']
+        best_score = result['best_score']
+        all_matching_chunks = result['matching_chunks']
+        all_matching_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
+        best_chunk = all_matching_chunks[0]
+        st.markdown("---")
+        score_color = "green" if best_score > 0 else "red"
+        st.header(f"Rank {i+1}: {video_name}")
+        st.markdown(f"**Relevance Score:** <span style='color:{score_color}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
+        st.info(f"Found {len(all_matching_chunks)} relevant chunk(s) in this video.")
 
+        st.subheader("Best Matching Chunk (Preview)")
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            video_path = best_chunk['metadata'].get('chunk_path', '')
+            if os.path.exists(video_path):
+                st.video(video_path)
+            else:
+                st.warning(f"Video not found: {video_path}")
+        with col2:
+            caption_str = best_chunk["metadata"].get('caption', '{}')
+            caption = parse_json(caption_str)
+            if isinstance(caption, dict) and caption:
+                st.markdown(f"**Summary:** {caption.get('Video Summary', '')}")
+                st.markdown(f"**Features:**")
+                for feature in caption.get("Features", []):
+                    st.text(f"- {' | '.join(str(v) for v in feature.values())}")
+            else:
+                st.markdown(f"**Caption:** `{caption_str}`")
+            st.markdown(f"**Score:** <span style='color:{'green' if best_score>0 else 'red'}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
+            st.markdown(f"**Chunk Path:** `{best_chunk['metadata'].get('chunk_path', 'N/A')}`")
+            chunk_path = best_chunk['metadata'].get('chunk_path', 'N/A')
+            if chunk_path:
+                metadata_filename = os.path.basename(chunk_path).replace(os.path.splitext(chunk_path)[1], '.json')
+                metadata_path = os.path.join(OUTPUT_METADATA_DIR, metadata_filename)
+                if os.path.exists(metadata_path):
+                    with st.expander("Show Object Tracking Info"):
+                        try:
+                            with open(metadata_path, 'r') as f:
+                                metadata = json.load(f)
+                            objects = metadata.get("objects", [])
+                            if objects:
+                                for obj in objects:
+                                    label = obj.get('label', 'N/A')
+                                    confidence = obj.get('last_confidence') 
+                                    st.markdown(f"**Object ID {obj.get('id', 'N/A')}**: `{label}` (Confidence: `{confidence:.2f}`)")
+                            else:
+                                st.write("No objects were tracked in this video chunk.")
+                        except Exception as e:
+                            st.error(f"Could not read metadata file: {e}")
+
+        if len(all_matching_chunks) > 0:
+            with st.expander("View all relevant chunks in this video"):
+                for other_chunk in all_matching_chunks[:]:
+                    score = other_chunk['rerank_score']
+                    path = other_chunk['metadata'].get('chunk_path', 'N/A')
+                    summary = parse_json(other_chunk['metadata'].get('caption', '{}')).get('Video Summary', 'N/A')
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        video_path = best_chunk['metadata'].get('chunk_path', '')
+                        if os.path.exists(video_path):
+                            st.video(video_path)
+                        else:
+                            st.warning(f"Video not found: {video_path}")
+                    with col2:
+                        caption_str = other_chunk["metadata"].get('caption', '{}')
+                        caption = parse_json(caption_str)
+                        if isinstance(caption, dict) and caption:
+                            st.markdown(f"**Summary:** {caption.get('Video Summary', '')}")
+                        else:
+                            st.markdown(f"**Caption:** `{caption_str}`")
+                        st.markdown(f"**Score:** <span style='color:{'green' if score>0 else 'red'}; font-weight:bold;'>{score:.4f}</span>", unsafe_allow_html=True)
+                        st.markdown(f"**Chunk Path:** `{best_chunk['metadata'].get('chunk_path', 'N/A')}`")
+                        # st.markdown(f"**Chunk:** `{os.path.basename(path)}` | "
+                        #         f"**Score:** <span style='color:{score_color}; font-weight:bold;'>{best_score:.4f}</span> | "
+                        #         f"**Summary:** {summary}", unsafe_allow_html=True)
+                        
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide")
@@ -190,7 +290,8 @@ with tab1:
     if st.button("Search"):
         with st.spinner("Searching and reranking..."):
             search_results = search_and_rerank(query, embedding_model, reranker_model, collection)
-            display_results(search_results)
+            # display_results(search_results)
+            display_video_results(search_results)
 
 # --- Browse Chunk Tab ---
 with tab2:

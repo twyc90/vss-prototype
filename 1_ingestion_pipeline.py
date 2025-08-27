@@ -26,7 +26,7 @@ OUTPUT_METADATA_DIR = "./out/metadata"
 OUTPUT_CHROMA_DIR = "./out/chroma_db"
 SAVE_CHUNKS = True
 CHUNK_SIZE = 10           # in seconds
-FRAMES_PER_CHUNK = 20     # frames per chunk
+FRAMES_PER_CHUNK = 8     # frames per chunk
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_CHUNK_DIR, exist_ok=True)
 os.makedirs(ANNOTATED_CHUNK_DIR, exist_ok=True)
@@ -74,7 +74,7 @@ VLM_API_KEY = "NA"
 # VLM_MODEL_NAME = "internvl3-14b-instruct"
 # VLM_MODEL_NAME = "google/gemma-3-12b"
 VLM_MODEL_NAME = "google/gemma-3-27b"
-# VLM_MODEL_NAME = "qwen/qwen2.5-vl-7b"
+LLM_MODEL_NAME = "qwen/qwen2.5-vl-7b"
 client = OpenAI(base_url=VLM_API_BASE, api_key=VLM_API_KEY)
 
 # ------------------------
@@ -98,10 +98,8 @@ def chunk_video(video_path):
         if not frames:
             break
         chunk_filename = f"{video_name}_chunk_{chunk_count}{video_ext}"
-        
-        indices = np.linspace(0, len(frames) - 1, num=FRAMES_PER_CHUNK, dtype=int)
-        frames = [frames[i] for i in indices]
-
+        # indices = np.linspace(0, len(frames) - 1, num=FRAMES_PER_CHUNK, dtype=int)
+        # frames = [frames[i] for i in indices]
         chunk_path = os.path.join(OUTPUT_CHUNK_DIR, chunk_filename)
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
         out = cv2.VideoWriter(chunk_path, fourcc, fps, (frames[0].shape[1], frames[0].shape[0]))
@@ -164,7 +162,7 @@ def detect_and_track_objects(chunk_path, model):
     fourcc = cv2.VideoWriter_fourcc(*'avc1')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
     is_motion_diff, is_motion_bgsub = has_motion_diff(chunk_path), has_motion_bgsub(chunk_path)
-    has_motion = is_motion_diff and is_motion_bgsub
+    has_motion = is_motion_diff or is_motion_bgsub
     chunk_metadata = {
         "chunk_path": chunk_path,
         "motion_detected": str(has_motion),
@@ -249,18 +247,34 @@ def vlm_caption(chunk_path, client):
     print(f"Generating caption for: {chunk_path}")
     cap = cv2.VideoCapture(chunk_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    base64_frames = []
-    frame_count = 0
+    # base64_frames = []
+    # frame_count = 0
+    # while True:
+    #     ret, frame = cap.read()
+    #     if not ret:
+    #         break
+    #     _, buffer = cv2.imencode(".jpg", frame)
+    #     base64_frames.append(base64.b64encode(buffer).decode("utf-8"))
+    #     frame_count += 1
+    # cap.release()
+    # if not base64_frames:
+    #     return "No frames extracted for captioning."
+
+    all_frames = []
     while True:
         ret, frame = cap.read()
-        if not ret:
-            break
+        if not ret: break
+        all_frames.append(frame)
+    cap.release()
+    if not all_frames: 
+        return "No frames extracted for captioning."
+    num_frames = len(all_frames)
+    indices = np.linspace(0, num_frames - 1, num=min(num_frames, FRAMES_PER_CHUNK), dtype=int)
+    sampled_frames = [all_frames[i] for i in indices]
+    base64_frames = []
+    for frame in sampled_frames:
         _, buffer = cv2.imencode(".jpg", frame)
         base64_frames.append(base64.b64encode(buffer).decode("utf-8"))
-        frame_count += 1
-    cap.release()
-    if not base64_frames:
-        return "No frames extracted for captioning."
     try:
         messages = [
             {
@@ -280,22 +294,22 @@ def vlm_caption(chunk_path, client):
         {
         "Features": [
         {
-        "tracker": "Young Man",
+        "tracker": "Young Man (ID 1)",
         "description": "A young man wearing a backpack, jeans, and a light-colored shirt. He appears to be looking at his phone. There is a red color handbag on the floor near to him.",
         "location": "Standing near the edge of a bus stop shelter.",
         },
         {
-        "tracker": "Bus",
+        "tracker": "Bus (ID 9)",
         ""description": "A green color SG bus with number 298",
         "location": "On the road",
         },
         {
-        "tracker": "Car",
+        "tracker": "Car (ID 12)",
         ""description": "A bright yellow color Honda civic",
         "location": "On the road",
         },
         {
-        "tracker": "Elderly Woman",
+        "tracker": "Elderly Woman (ID 32)",
         ""description": "An elderly woman wearing a dark jacket and seated on the bus stop bench.",
         "location": "Seated on the bus stop bench."
         }],
