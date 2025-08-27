@@ -343,7 +343,7 @@ def vlm_caption(chunk_path, client):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    embedding = embedding_model.encode(EMBEDDING_MODEL_NAME, normalize_embeddings=True).tolist()
+    embedding = embedding_model.encode(caption, normalize_embeddings=True).tolist()
     if embedding:
         try:
             collection.upsert(
