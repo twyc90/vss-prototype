@@ -25,6 +25,9 @@ RERANKER_MODEL_NAME = 'BAAI/bge-reranker-large'
 ANNOTATED_CHUNK_DIR = "./out/video_chunks_cv"
 OUTPUT_METADATA_DIR = "./out/metadata"
 VIDEO_COLLECTION_NAME = "video_captions"
+MIN_SCORE = 0.6
+COLOR_SCORE = 0.5
+RERANKER_TOP_K = 5
 
 # -------------------------------------
 # --- Device selection (MPS on Mac) ---
@@ -130,7 +133,7 @@ def load_chroma_collection():
     return collection, video_collection
 
 
-def search_and_rerank(query_text=None, query_image=None, query_video=None, processor=None, embedding_model=None, reranker_model=None, collection=None, top_n=50, rerank_top_k=5):
+def search_and_rerank(query_text=None, query_image=None, query_video=None, processor=None, embedding_model=None, reranker_model=None, collection=None, top_n=50, rerank_top_k=10, min_score=0.6):
     if query_text is not None:
         type='text'
     elif query_image is not None:
@@ -182,7 +185,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
                 'rerank_score': rerank_scores[i]
             })
         reranked_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
-        top_chunks = reranked_chunks[:rerank_top_k]
+        top_chunks = reranked_chunks
     elif type=='image':
         matched_chunks = []
         for meta, distance in zip(search_results['metadatas'][0], search_results['distances'][0]):
@@ -191,7 +194,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
                 'rerank_score': 1-distance
             })
         matched_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
-        top_chunks = matched_chunks[:rerank_top_k]
+        top_chunks = matched_chunks
 
     video_results = {}
     for chunk in top_chunks:
@@ -202,13 +205,19 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
             video_results[video_name] = {
                 'video_name': video_name,
                 'best_score': chunk['rerank_score'],
-                'matching_chunks': [chunk]}
+                'matching_chunks': [chunk],
+                'chunk_paths': [chunk_path]
+                }
         else:
-            video_results[video_name]['matching_chunks'].append(chunk)
+            if chunk_path not in video_results[video_name]['chunk_paths']:
+                video_results[video_name]['matching_chunks'].append(chunk)
+                video_results[video_name]['chunk_paths'].append(chunk_path)
             if chunk['rerank_score'] > video_results[video_name]['best_score']:
                 video_results[video_name]['best_score'] = chunk['rerank_score']
     final_list = sorted(video_results.values(), key=lambda x: x['best_score'], reverse=True)
-    return final_list
+    final_list = sorted([v for v in video_results.values() if v['best_score']>=min_score], key=lambda x: x['best_score'], reverse=True)
+    return final_list[:rerank_top_k]
+
 
 def browse_collection(collection, limit=30):
     if not collection:
@@ -266,7 +275,7 @@ def display_results(results_list):
                 st.markdown(f"**Caption:** `{caption_str}`")
             if 'rerank_score' in result:
                 score = result['rerank_score']
-                color = "green" if score > 0.5 else "red"
+                color = "green" if score>COLOR_SCORE else "red"
                 st.markdown(
                     f"""<p><strong>Re-rank Score: </strong>
                         <span style='color:{color}; font-weight:bold;'>{score:.4f}</span>
@@ -328,7 +337,7 @@ def display_video_results(results_list):
         all_matching_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
         best_chunk = all_matching_chunks[0]
         st.markdown("---")
-        score_color = "green" if best_score > 0.5 else "red"
+        score_color = "green" if best_score > COLOR_SCORE else "red"
         st.header(f"Rank {i+1}: {video_name}")
         st.markdown(f"**Relevance Score:** <span style='color:{score_color}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
         st.info(f"Found {len(all_matching_chunks)} relevant chunk(s) in this video.")
@@ -351,7 +360,7 @@ def display_video_results(results_list):
                     st.text(f"- {' | '.join(str(v) for v in feature.values())}")
             else:
                 st.markdown(f"**Caption:** `{caption_str}`")
-            st.markdown(f"**Score:** <span style='color:{'green' if best_score>0.5 else 'red'}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
+            st.markdown(f"**Score:** <span style='color:{'green' if best_score>COLOR_SCORE else 'red'}; font-weight:bold;'>{best_score:.4f}</span>", unsafe_allow_html=True)
             st.markdown(f"**Chunk Path:** `{best_chunk['metadata'].get('chunk_path', 'N/A')}`")
             chunk_path = best_chunk['metadata'].get('chunk_path', 'N/A')
             if chunk_path:
@@ -393,7 +402,7 @@ def display_video_results(results_list):
                             st.markdown(f"**Summary:** {caption.get('Video Summary', '')}")
                         else:
                             st.markdown(f"**Caption:** `{caption_str}`")
-                        st.markdown(f"**Score:** <span style='color:{'green' if score>0 else 'red'}; font-weight:bold;'>{score:.4f}</span>", unsafe_allow_html=True)
+                        st.markdown(f"**Score:** <span style='color:{'green' if score>COLOR_SCORE else 'red'}; font-weight:bold;'>{score:.4f}</span>", unsafe_allow_html=True)
                         st.markdown(f"**Chunk Path:** `{best_chunk['metadata'].get('chunk_path', 'N/A')}`")
 
 
@@ -419,7 +428,28 @@ tab1, tab2, tab3 = _col2.tabs(["🔎 Search Chunk by Query", "📚 Browse Chunks
 
 # --- Search Tab ---
 with tab1:
-    # query = st.text_input("Enter your search query:", "Group of male and female subjects walking together. One of them wearing a T-shirt with strawberry motifs.")
+    with st.expander("Search Parameters"):
+        param_col11, param_col21 = st.columns([5,10])
+        param_col12, param_col22 = st.columns([5,10])
+        with param_col11:
+            min_score_val = st.slider(
+                "Minimum Score Threshold",
+                min_value=0.0,
+                max_value=1.0,
+                step=0.01,
+                value=MIN_SCORE,
+                help="Filters out results with a relevance score below this value."
+            )
+        with param_col12:
+            reranker_top_k_val = st.slider(
+                "Number of Results to Display (Top K)",
+                min_value=1,
+                max_value=20,
+                step=1,
+                value=RERANKER_TOP_K,
+                help="The maximum number of final video results to show."
+            )
+
     query_mode = st.radio("Choose query type:", ["text", "image", "video"])
     query_text, query_image, query_video = None, None, None
 
@@ -440,7 +470,7 @@ with tab1:
             
     if st.button("Search"):
         with st.spinner("Searching and reranking..."):
-            search_results = search_and_rerank(query_text, query_image, query_video, processor, embedding_model, reranker_model, collection)
+            search_results = search_and_rerank(query_text, query_image, query_video, processor, embedding_model, reranker_model, collection, rerank_top_k=reranker_top_k_val, min_score=min_score_val)
             display_video_results(search_results)
 
 # --- Browse Chunk Tab ---

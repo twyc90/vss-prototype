@@ -278,7 +278,7 @@ def detect_and_track_objects(chunk_path, model):
                         }
                         next_object_id += 1
 
-                    label = f"ID {display_id}: {class_name} {box.conf[0]:.2f}"
+                    label = f"ID {display_id}: {class_name} {box.conf[0]:.3f}"
                     latest_boxes_to_draw.append((coords, label))
         for coords, label in latest_boxes_to_draw:
              cv2.rectangle(frame, (coords[0], coords[1]), (coords[2], coords[3]), (0, 255, 0), 2)
@@ -431,7 +431,6 @@ async def vlm_caption(chunk_path, client):
                     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
                     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"image"}
                     ],
-                documents=[caption, caption],
                 ids=[chunk_filename+"_text", chunk_filename+"_image"] # Use filename as a unique ID
             )
             print(f"Added embedding for {chunk_filename} to ChromaDB.")
