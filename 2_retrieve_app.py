@@ -224,14 +224,14 @@ def browse_collection(collection, limit=30):
         return []
     results = collection.get(
         limit=limit,
-        include=["metadatas"]
+        include=["metadatas","embeddings"]
     )
     formatted_results = []
-    ids = set()
-    for id, meta in zip(results['ids'], results['metadatas']):
-        if meta['video_name'] not in ids:
-            formatted_results.append({'metadata': meta})
-        ids.add(meta['video_name'])
+    # ids = set()
+    for id, meta, emb in zip(results['ids'], results['metadatas'], results['embeddings']):
+        # if meta['video_name'] not in ids:
+        formatted_results.append({'metadata': meta, 'embedding':emb})
+            # ids.add(meta['video_name'])
     return formatted_results
 
 
@@ -264,6 +264,8 @@ def display_results(results_list):
                 st.warning(f"Video not found at: {video_path}")
         with col2:
             caption_str = result["metadata"].get('caption', '{}')
+            type = result["metadata"].get('type','')
+            emb = result["embedding"]
             caption = parse_json(caption_str)
             st.subheader(f"Rank {i+1}")
             if isinstance(caption, dict) and caption:
@@ -271,6 +273,9 @@ def display_results(results_list):
                 st.markdown(f"**Features:**")
                 for feature in caption.get("Features", []):
                     st.text(f"- {' | '.join(str(v) for v in feature.values())}")
+                st.markdown(f"**Source**: {type}")
+                with st.expander("Embeddings"):
+                    st.markdown(f"{emb}")
             else:
                 st.markdown(f"**Caption:** `{caption_str}`")
             if 'rerank_score' in result:
