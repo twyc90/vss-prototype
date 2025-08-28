@@ -87,16 +87,6 @@ client = AsyncOpenAI(base_url=VLM_API_BASE, api_key=VLM_API_KEY)
 # ------------------------
 # --- Helper Functions ---
 # ------------------------
-# def encode_text(texts, processor, model, device="cpu", normalize=True):
-#     inputs = processor(texts, padding=True, truncation=True, return_tensors="pt").to(device)
-#     with torch.no_grad():
-#         outputs = model(**inputs)
-#         embeddings = outputs.last_hidden_state.mean(dim=1) # mean pooling
-#     embeddings = embeddings.cpu().numpy()
-#     if normalize:
-#         embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
-#     return embeddings.tolist()
-
 def encode_text(texts, processor, model, device="cpu", normalize=True, max_length=77):
     embeddings = []
     try:
@@ -412,7 +402,6 @@ async def vlm_caption(chunk_path, client):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    # embedding = embedding_model.encode(caption, normalize_embeddings=True).tolist()
     embedding = encode_text([caption], processor, embedding_model, device=device)[0]
     pil_frames = [Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) for frame in sampled_frames]
     image_embeddings = encode_image(pil_frames, processor, embedding_model, device=device)
@@ -501,7 +490,6 @@ async def create_aggregated_summary(video_path, client):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    # embedding = embedding_model.encode(final_summary, normalize_embeddings=True).tolist()
     embedding = encode_text([final_summary], processor, embedding_model, device=device)[0]
     if embedding:
         try:

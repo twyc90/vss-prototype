@@ -42,16 +42,6 @@ else:
 # ------------------------
 # --- Emb Model Config ---
 # ------------------------
-# def encode_text(texts, processor, model, device="cpu", normalize=True):
-#     inputs = processor(texts, padding=True, truncation=True, return_tensors="pt").to(device)
-#     with torch.no_grad():
-#         outputs = model(**inputs)
-#         embeddings = outputs.last_hidden_state.mean(dim=1) # mean pooling
-#     embeddings = embeddings.cpu().numpy()
-#     if normalize:
-#         embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
-#     return embeddings.tolist()
-
 def encode_text(texts, processor, model, device="cpu", normalize=True, max_length=77):
     embeddings = []
     try:
