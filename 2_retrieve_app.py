@@ -275,7 +275,7 @@ def display_results(results_list):
                     st.text(f"- {' | '.join(str(v) for v in feature.values())}")
                 st.markdown(f"**Source**: {type}")
                 with st.expander("Embeddings"):
-                    st.markdown(f"{emb}")
+                    st.text(f"{', '.join([str(e) for e in emb.tolist()])}")
             else:
                 st.markdown(f"**Caption:** `{caption_str}`")
             if 'rerank_score' in result:

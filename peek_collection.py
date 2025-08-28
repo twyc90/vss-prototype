@@ -3,6 +3,7 @@ import cv2
 import torch
 import numpy as np
 import json, ast
+from FlagEmbedding import FlagReranker
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoProcessor, AutoModel, XCLIPModel
 import os
@@ -22,19 +23,17 @@ from PIL import Image
 # --- Config ---
 # --------------
 DATA_DIR = "./data/videos"
-OUTPUT_DIR = "./out"
-OUTPUT_CHUNK_DIR = "./out/video_chunks"
+OUTPUT_CHROMA_DIR = "./out/chroma_db"
+COLLECTION_NAME = "chunk_captions"
+# EMBEDDING_MODEL_NAME = 'BAAI/bge-m3'
+EMBEDDING_MODEL_NAME = "BAAI/BGE-VL-base"
+RERANKER_MODEL_NAME = 'BAAI/bge-reranker-large'
 ANNOTATED_CHUNK_DIR = "./out/video_chunks_cv"
 OUTPUT_METADATA_DIR = "./out/metadata"
-OUTPUT_CHROMA_DIR = "./out/chroma_db"
-SAVE_CHUNKS = True
-CHUNK_SIZE = 10           # in seconds
-FRAMES_PER_CHUNK = 8     # frames per chunk
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_CHUNK_DIR, exist_ok=True)
-os.makedirs(ANNOTATED_CHUNK_DIR, exist_ok=True)
-os.makedirs(OUTPUT_METADATA_DIR, exist_ok=True)
-os.makedirs(OUTPUT_CHROMA_DIR, exist_ok=True)
+VIDEO_COLLECTION_NAME = "video_captions"
+MIN_SCORE = 0.6
+COLOR_SCORE = 0.5
+RERANKER_TOP_K = 5
 
 # -------------------------------------
 # --- Device selection (MPS on Mac) ---
@@ -55,6 +54,102 @@ collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hn
 VIDEO_COLLECTION_NAME = "video_captions"
 video_collection = client.get_or_create_collection(name=VIDEO_COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
-peeks = collection.peek(50)
 
-print(peeks['ids'])
+def encode_text(texts, processor, model, device="cpu", normalize=True, max_length=77):
+    embeddings = []
+    try:
+        for text in texts:
+            tokens = processor(text=text, return_tensors="pt", add_special_tokens=True)
+            input_ids = tokens["input_ids"][0]
+            if len(input_ids) <= max_length:
+                print('normal encode')
+                inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
+                with torch.no_grad():
+                    outputs = model.get_text_features(**inputs)
+                emb = outputs.cpu().numpy()
+            else:
+                print('chunk and mean encode')
+                chunks = [input_ids[i:i+max_length] for i in range(0, len(input_ids), max_length)]
+                chunk_embs = []
+                for chunk in chunks:
+                    inputs = {"input_ids": chunk.unsqueeze(0).to(device)}
+                    with torch.no_grad():
+                        outputs = model.get_text_features(**inputs)
+                    chunk_embs.append(outputs.cpu().numpy())
+                emb = np.mean(chunk_embs, axis=0)
+            if normalize:
+                emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return emb.tolist()
+
+
+def encode_image(images, processor, model, device="cpu", normalize=True):
+    try:
+        inputs = processor(images=images, return_tensors="pt").to(device)
+        with torch.no_grad():
+            outputs = model.get_image_features(**inputs)
+        embeddings = outputs.cpu().numpy()
+        if normalize:
+            embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return embeddings.tolist()
+
+
+def encode_video(pil_frames, processor, model, device="cpu", normalize=True):
+    try:
+        image_embeddings = encode_image(pil_frames, processor, embedding_model, device=device)
+        if len(image_embeddings)>1:
+            avg_image_embedding = np.mean(image_embeddings, axis=0)
+            avg_image_embedding = avg_image_embedding / np.linalg.norm(avg_image_embedding)
+            avg_image_embedding = avg_image_embedding.tolist()
+        else:
+            avg_image_embedding = image_embeddings[0]
+    except Exception as e:
+        print(f'Encoding error. {e}')
+    return avg_image_embedding
+
+
+
+def cosine_similarity(vec1, vec2):
+    dot_product = np.dot(vec1, vec2)
+    norm_vec1 = np.linalg.norm(vec1)
+    norm_vec2 = np.linalg.norm(vec2)
+    if norm_vec1 == 0 or norm_vec2 == 0:
+        return 0
+    return dot_product / (norm_vec1 * norm_vec2)
+
+
+def load_models():
+    # embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    processor = AutoProcessor.from_pretrained(EMBEDDING_MODEL_NAME)
+    embedding_model = AutoModel.from_pretrained(EMBEDDING_MODEL_NAME).to(device)
+    embedding_model.eval()
+    reranker_model = FlagReranker(RERANKER_MODEL_NAME, use_fp16=True)
+    print("Models loaded successfully.")
+    return embedding_model, reranker_model, processor
+
+embedding_model, reranker_model, processor = load_models()
+# Text
+# query_embedding = encode_text(['Group of male and female subjects walking together. One of them wearing a T-shirt with strawberry motifs.'], processor, embedding_model, device=device)[0]
+# Image
+img = Image.open('/Users/yeecherngoh/Downloads/htx-vss-proj/data/videos_bckup/Screenshot 2025-08-27 at 10.33.21 PM.png')
+emb_image = encode_image([img], processor, embedding_model, device=device)[0]
+query_embedding = emb_image
+# result = collection.get(ids=["CCTV6|VID_GEN4_chunk_0.mp4_text", "CCTV6|VID_GEN4_chunk_0.mp4_image"],
+#                         include=['embeddings'])
+
+search_results = collection.query(
+    query_embeddings=[query_embedding],
+    n_results=5,
+    include=['metadatas','documents','embeddings','distances'],
+    # where={'type':type}
+)
+candidate_emb = search_results.get('embeddings')[0]
+
+for c in candidate_emb:
+    print(len(query_embedding), len(c))
+    print(cosine_similarity(query_embedding, c))
+
+
