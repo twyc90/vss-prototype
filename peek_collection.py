@@ -132,24 +132,64 @@ def load_models():
 
 embedding_model, reranker_model, processor = load_models()
 # Text
-# query_embedding = encode_text(['Group of male and female subjects walking together. One of them wearing a T-shirt with strawberry motifs.'], processor, embedding_model, device=device)[0]
-# Image
-img = Image.open('/Users/yeecherngoh/Downloads/htx-vss-proj/data/videos_bckup/Screenshot 2025-08-27 at 10.33.21 PM.png')
-emb_image = encode_image([img], processor, embedding_model, device=device)[0]
-query_embedding = emb_image
-# result = collection.get(ids=["CCTV6|VID_GEN4_chunk_0.mp4_text", "CCTV6|VID_GEN4_chunk_0.mp4_image"],
-#                         include=['embeddings'])
+query_text = 'Group of male and female subjects walking together. One of them wearing a T-shirt with strawberry motifs.'
+query_embedding = encode_text([query_text], processor, embedding_model, device=device)[0]
 
+# Image
+# img = Image.open('/Users/yeecherngoh/Downloads/htx-vss-proj/data/videos_bckup/Screenshot 2025-08-27 at 10.33.21 PM.png')
+# emb_image = encode_image([img], processor, embedding_model, device=device)[0]
+# query_embedding = emb_image
+
+# Video
+# cap = cv2.VideoCapture('/Users/yeecherngoh/Downloads/htx-vss-proj/data/videos/CCTV4|VID_GEN1.mp4')
+# fps = cap.get(cv2.CAP_PROP_FPS)
+# all_frames = []
+# while True:
+#     ret, frame = cap.read()
+#     if not ret: break
+#     all_frames.append(frame)
+# cap.release()
+# num_frames = len(all_frames)
+# indices = np.linspace(0, num_frames - 1, num=min(num_frames, 8), dtype=int)
+# sampled_frames = [all_frames[i] for i in indices]
+# pil_frames = [Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) for frame in sampled_frames]
+# query_embedding = encode_video(pil_frames, processor, embedding_model, device=device)
+
+# Text
 search_results = collection.query(
     query_embeddings=[query_embedding],
     n_results=5,
     include=['metadatas','documents','embeddings','distances'],
-    # where={'type':type}
 )
-candidate_emb = search_results.get('embeddings')[0]
-
+rerank_pairs = []
+for metadata in search_results['metadatas'][0]:
+    rerank_pairs.append([query_text, metadata.get('caption', '')])
+rerank_scores = reranker_model.compute_score(rerank_pairs)
+rerank_scores = torch.sigmoid(torch.tensor(rerank_scores)).tolist()
+reranked_chunks = []
+for i, (meta, emb) in enumerate(zip(search_results['metadatas'][0], search_results['embeddings'][0])):
+    reranked_chunks.append({
+        'metadata': meta,
+        'rerank_score': rerank_scores[i],
+        'embeddings': emb
+    })
+reranked_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
+top_chunks = reranked_chunks[:5]
+candidate_emb = [tc['embeddings'] for tc in reranked_chunks]
 for c in candidate_emb:
     print(len(query_embedding), len(c))
     print(cosine_similarity(query_embedding, c))
+print(f'Rerank: {rerank_scores}')
 
+
+# Image/Video
+# candidate_emb = search_results.get('embeddings')[0]
+# for c in candidate_emb:
+#     print(len(query_embedding), len(c))
+#     print(cosine_similarity(query_embedding, c))
+
+# Pair compare
+# candidate_emb = collection.get(ids=["CCTV4|VID_GEN1_chunk_0.mp4_text", "CCTV4|VID_GEN1_chunk_0.mp4_image"],
+#                         include=['embeddings']).get('embeddings')
+# print(cosine_similarity(candidate_emb[0], candidate_emb[1]))
 
