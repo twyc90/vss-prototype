@@ -162,7 +162,6 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
         include=['metadatas','documents','embeddings','distances'],
         # where={'type':type}
     )
-    print([1-i for i in search_results.get('distances')[0]])
     if type=='text':
         rerank_pairs = []
         for metadata in search_results['metadatas'][0]:

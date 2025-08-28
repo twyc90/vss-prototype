@@ -136,6 +136,7 @@ def chunk_video(video_path):
     chunk_count = 0
     video_filename = os.path.basename(video_path)
     video_name, video_ext = os.path.splitext(video_filename)
+    chunk_paths = []
     while True:
         frames = []
         for _ in range(chunk_frames):
@@ -149,6 +150,7 @@ def chunk_video(video_path):
         # indices = np.linspace(0, len(frames) - 1, num=FRAMES_PER_CHUNK, dtype=int)
         # frames = [frames[i] for i in indices]
         chunk_path = os.path.join(OUTPUT_CHUNK_DIR, chunk_filename)
+        chunk_paths.append(chunk_path)
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
         out = cv2.VideoWriter(chunk_path, fourcc, fps, (frames[0].shape[1], frames[0].shape[0]))
         for frame in frames:
@@ -156,7 +158,7 @@ def chunk_video(video_path):
         out.release()
         chunk_count += 1
     cap.release()
-
+    return chunk_paths
 
 def has_motion_diff(video_path, threshold=30, min_motion_ratio=0.02):
     cap = cv2.VideoCapture(video_path)
@@ -199,95 +201,103 @@ def has_motion_bgsub(video_path, min_motion_frames=5):
     return motion_frames >= min_motion_frames
 
 
-def detect_and_track_objects(chunk_path, model):
-    print(f"Detect motion & track object: {chunk_path}")
-    cap = cv2.VideoCapture(chunk_path)
+from collections import defaultdict
+def detect_and_track_objects(chunk_paths):
+    chunk_cv_paths = []
+    for chunk_path in chunk_paths:
+        print(f"Detect motion & track object: {chunk_path}")
+        cap = cv2.VideoCapture(chunk_path)
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    output_video_path = os.path.join(ANNOTATED_CHUNK_DIR, os.path.basename(chunk_path))
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
-    is_motion_diff, is_motion_bgsub = has_motion_diff(chunk_path), has_motion_bgsub(chunk_path)
-    has_motion = is_motion_diff or is_motion_bgsub
-    chunk_metadata = {
-        "chunk_path": chunk_path,
-        "motion_detected": str(has_motion),
-        "objects": []
-    }
-    os.remove(chunk_path)
-    if not has_motion:
-        print(f"No motion detected in {chunk_path}. Skipping object tracking.")
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        output_video_path = os.path.join(ANNOTATED_CHUNK_DIR, os.path.basename(chunk_path))
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')
+        out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+        is_motion_diff, is_motion_bgsub = has_motion_diff(chunk_path), has_motion_bgsub(chunk_path)
+        has_motion = is_motion_diff or is_motion_bgsub
+        chunk_metadata = {
+            "chunk_path": chunk_path,
+            "motion_detected": str(has_motion),
+            "objects": []
+        }
+        os.remove(chunk_path)
+        if not has_motion:
+            print(f"No motion detected in {chunk_path}. Skipping object tracking.")
+            cap.release()
+            out.release()
+            os.remove(output_video_path)
+            return
+
+        chunk_cv_paths.append(output_video_path)
+        tracked_objects = {}
+        next_object_id = 0
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            latest_boxes_to_draw = []
+            results = model(frame, verbose=False)
+            for result in results:
+                for box in result.boxes:
+                    if box.conf[0] > CONFIDENCE_THRESHOLD:
+                        coords_float = box.xyxy[0].cpu().numpy()
+                        coords = coords_float.astype(int)
+                        class_id = int(box.cls[0].cpu().numpy())
+                        class_name = model.names[class_id]
+                        center_x = (coords_float[0] + coords_float[2]) / 2
+                        center_y = (coords_float[1] + coords_float[3]) / 2
+                        
+                        confidence = box.conf[0].cpu().numpy().item()
+                        found_match = False
+                        display_id = -1
+                        for obj_id, obj_data in tracked_objects.items():
+                            dist = np.sqrt((center_x - obj_data['last_pos'][0])**2 + (center_y - obj_data['last_pos'][1])**2)
+                            if obj_data['label'] == class_name and dist < 75:
+                                obj_data['last_pos'] = (center_x, center_y)
+                                if frame_idx not in obj_data['frames_present']:
+                                    obj_data['frames_present'].append(frame_idx)
+                                    obj_data['obj_bbox'][frame_idx] = [coords[0], coords[1], coords[2], coords[3]]
+                                found_match = True
+                                display_id = obj_id
+                                break
+                        
+                        if not found_match:
+                            display_id = next_object_id
+                            tracked_objects[display_id] = {
+                                'id': display_id,
+                                'label': class_name,
+                                'initial_pos': (center_x, center_y),
+                                'last_pos': (center_x, center_y),
+                                'frames_present': [frame_idx],
+                                'obj_bbox': {frame_idx: [coords[0], coords[1], coords[2], coords[3]]},
+                                'last_confidence': confidence
+                            }
+                            next_object_id += 1
+
+                        label = f"ID {display_id}: {class_name} {box.conf[0]:.3f}"
+                        latest_boxes_to_draw.append((coords, label))
+            for coords, label in latest_boxes_to_draw:
+                cv2.rectangle(frame, (coords[0], coords[1]), (coords[2], coords[3]), (0, 255, 0), 2)
+                cv2.putText(frame, label, (coords[0], coords[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            out.write(frame)
+            frame_idx += 1
+        chunk_metadata["objects"] = list(tracked_objects.values())
+        metadata_filename = os.path.basename(chunk_path).replace(os.path.splitext(chunk_path)[1], '.json')
+        metadata_path = os.path.join(OUTPUT_METADATA_DIR, metadata_filename)
+        with open(metadata_path, 'w') as f:
+            def convert(o):
+                if isinstance(o, np.generic): return o.item()  
+                raise TypeError
+            json.dump(chunk_metadata, f, indent=4, default=convert)
+        
         cap.release()
         out.release()
-        os.remove(output_video_path)
-        return
+    return chunk_cv_paths
 
-    tracked_objects = {}
-    next_object_id = 0
-    frame_idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        latest_boxes_to_draw = []
-        results = model(frame, verbose=False)
-        for result in results:
-            for box in result.boxes:
-                if box.conf[0] > CONFIDENCE_THRESHOLD:
-                    coords_float = box.xyxy[0].cpu().numpy()
-                    coords = coords_float.astype(int)
-                    class_id = int(box.cls[0].cpu().numpy())
-                    class_name = model.names[class_id]
-                    center_x = (coords_float[0] + coords_float[2]) / 2
-                    center_y = (coords_float[1] + coords_float[3]) / 2
-                    
-                    confidence = box.conf[0].cpu().numpy().item()
-                    found_match = False
-                    display_id = -1
-                    for obj_id, obj_data in tracked_objects.items():
-                        dist = np.sqrt((center_x - obj_data['last_pos'][0])**2 + (center_y - obj_data['last_pos'][1])**2)
-                        if obj_data['label'] == class_name and dist < 75:
-                            obj_data['last_pos'] = (center_x, center_y)
-                            if frame_idx not in obj_data['frames_present']:
-                                obj_data['frames_present'].append(frame_idx)
-                            found_match = True
-                            display_id = obj_id
-                            break
-                    
-                    if not found_match:
-                        display_id = next_object_id
-                        tracked_objects[display_id] = {
-                            'id': display_id,
-                            'label': class_name,
-                            'initial_pos': (center_x, center_y),
-                            'last_pos': (center_x, center_y),
-                            'frames_present': [frame_idx],
-                            'last_confidence': confidence
-                        }
-                        next_object_id += 1
 
-                    label = f"ID {display_id}: {class_name} {box.conf[0]:.3f}"
-                    latest_boxes_to_draw.append((coords, label))
-        for coords, label in latest_boxes_to_draw:
-             cv2.rectangle(frame, (coords[0], coords[1]), (coords[2], coords[3]), (0, 255, 0), 2)
-             cv2.putText(frame, label, (coords[0], coords[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        out.write(frame)
-        frame_idx += 1
-    chunk_metadata["objects"] = list(tracked_objects.values())
-    metadata_filename = os.path.basename(chunk_path).replace(os.path.splitext(chunk_path)[1], '.json')
-    metadata_path = os.path.join(OUTPUT_METADATA_DIR, metadata_filename)
-    with open(metadata_path, 'w') as f:
-        def convert(o):
-            if isinstance(o, np.generic): return o.item()  
-            raise TypeError
-        json.dump(chunk_metadata, f, indent=4, default=convert)
-    
-    cap.release()
-    out.release()
-
-async def vlm_caption(chunk_path, client):
+async def vlm_caption(chunk_path):
     print(f"Generating caption for: {chunk_path}")
     cap = cv2.VideoCapture(chunk_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -438,7 +448,7 @@ def parse_json(json_string):
             json_obj = {}
     return json_obj
 
-async def create_aggregated_summary(video_path, client):
+async def create_aggregated_summary(video_path):
     video_name = video_path.split(DATA_DIR+'/')[1]
     print(f"Aggregating summaries for video: {video_name}")
     chunk_summaries = []
@@ -503,57 +513,40 @@ async def create_aggregated_summary(video_path, client):
             print(f"Error adding to ChromaDB: {e}")
 
 
-## Chunk Video
-def chunk_video_task():
-    for filename in os.listdir(DATA_DIR):
-        if filename.lower().endswith((".mp4", ".avi", ".mov")):
-            video_path = os.path.join(DATA_DIR, filename)
-            chunk_video(video_path)
-
-## CV Pipeline
-def cv_video_task():
-    for chunk_filename in os.listdir(OUTPUT_CHUNK_DIR):
-        if chunk_filename.lower().endswith((".mp4", ".avi", ".mov")):
-            chunk_path = os.path.join(OUTPUT_CHUNK_DIR, chunk_filename)
-            detect_and_track_objects(chunk_path, model)
-
-# ## VLM Pipeline
-# for chunk_filename in os.listdir(ANNOTATED_CHUNK_DIR):
-#     if chunk_filename.lower().endswith((".mp4", ".avi", ".mov")):
-#         chunk_path = os.path.join(ANNOTATED_CHUNK_DIR, chunk_filename)
-#         vlm_caption(chunk_path, client)
-
-# ## LLM Agg Pipeline
-# for filename in os.listdir(DATA_DIR):
-#     if filename.lower().endswith((".mp4", ".avi", ".mov")):
-#         video_path = os.path.join(DATA_DIR, filename)
-#         create_aggregated_summary(video_path, client)
-
-async def run_vlm_pipeline():
-    tasks = []
-    for chunk_filename in os.listdir(ANNOTATED_CHUNK_DIR):
-        if chunk_filename.lower().endswith((".mp4", ".avi", ".mov")):
-            chunk_path = os.path.join(ANNOTATED_CHUNK_DIR, chunk_filename)
-            tasks.append(vlm_caption(chunk_path, client))
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    print("VLM Pipeline finished")
+async def vlm_caption_all(chunk_paths):
+    tasks = [vlm_caption(path) for path in chunk_paths]
+    results = await asyncio.gather(*tasks)
     return results
 
-async def run_llm_pipeline():
-    tasks = []
-    for filename in os.listdir(DATA_DIR):
-        if filename.lower().endswith((".mp4", ".avi", ".mov")):
-            video_path = os.path.join(DATA_DIR, filename)
-            tasks.append(create_aggregated_summary(video_path, client))
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    print("LLM Pipeline finished")
+async def llm_summarize_all(video_paths):
+    tasks = [create_aggregated_summary(path) for path in video_paths]
+    results = await asyncio.gather(*tasks)
     return results
+
+# -------------------
+# Pipeline for one video
+# -------------------
+async def process_video(video_path):
+    chunks = chunk_video(video_path)
+    chunks_cv = detect_and_track_objects(chunks)
+    return chunks_cv
 
 async def main():
-    chunk_video_task()
-    cv_video_task()
-    await run_vlm_pipeline()
-    await run_llm_pipeline()
+    video_paths = []
+    for filename in os.listdir(DATA_DIR):
+        if filename.lower().endswith((".mp4", ".avi", ".mov")):
+            video_path = os.path.join(DATA_DIR, filename)
+            video_paths.append(video_path)
+
+    tasks = [process_video(v) for v in video_paths]
+    chunks_cv = await asyncio.gather(*tasks)
+    for cv in chunks_cv:
+        if cv is not None:
+            print(cv[0])
+    chunks_cv_path = [cv[0] for cv in chunks_cv if cv is not None]
+    vlm_results = await vlm_caption_all(chunks_cv_path)
+    llm_results = await llm_summarize_all(video_paths)
+    return None
 
 if __name__ == "__main__":
     asyncio.run(main())
