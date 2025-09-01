@@ -51,16 +51,6 @@ elif torch.cuda.is_available():
 else:
     device = "cpu"
 
-# -------------------------
-# --- Connect to Chroma ---
-# -------------------------
-COLLECTION_NAME = "chunk_captions"
-client = chromadb.PersistentClient(path=OUTPUT_CHROMA_DIR)
-collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
-VIDEO_COLLECTION_NAME = "video_captions"
-video_collection = client.get_or_create_collection(name=VIDEO_COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
-
-
 # ------------------------
 # --- Emb Model Config ---
 # ------------------------
@@ -70,43 +60,51 @@ EMBEDDING_MODEL_NAME = 'BAAI/BGE-VL-base'
 processor = AutoProcessor.from_pretrained(EMBEDDING_MODEL_NAME)
 embedding_model = AutoModel.from_pretrained(EMBEDDING_MODEL_NAME).to(device)
 
+# -------------------------
+# --- Connect to Chroma ---
+# -------------------------
+COLLECTION_NAME = "chunk_captions"
+client = chromadb.PersistentClient(path=OUTPUT_CHROMA_DIR)
+collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
+VIDEO_COLLECTION_NAME = "video_captions"
+video_collection = client.get_or_create_collection(name=VIDEO_COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
-# # ------------------------
-# # --- Milvus Lite Setup ---
-# # ------------------------
-# MILVUS_DB_PATH = "./out/milvus.db"
-# CHUNK_COLLECTION = "chunk_captions"
-# VIDEO_COLLECTION = "video_captions"
-# connections.connect("default", uri=MILVUS_DB_PATH)
-# with torch.no_grad():
-#     dummy = processor(text="hello", return_tensors="pt").to(device)
-#     dim = embedding_model.get_text_features(**dummy).shape[-1]
-# print(f'Embedding size: {dim}')
+# ------------------------
+# --- Milvus Lite Setup ---
+# ------------------------
+MILVUS_DB_PATH = "./out/milvus.db"
+CHUNK_COLLECTION = "chunk_captions"
+VIDEO_COLLECTION = "video_captions"
+connections.connect("default", uri=MILVUS_DB_PATH)
+with torch.no_grad():
+    dummy = processor(text="hello", return_tensors="pt").to(device)
+    dim = embedding_model.get_text_features(**dummy).shape[-1]
+print(f'Embedding size: {dim}')
 
-# index_params = {
-#     "metric_type": "IP",
-#     "index_type": "IVF_FLAT",
-#     "params": {"nlist": 128}
-# }
-# chunk_fields = [
-#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
-#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
-#     FieldSchema(name="metadata", dtype=DataType.JSON),
-# ]
-# video_fields = [
-#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
-#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
-#     FieldSchema(name="metadata", dtype=DataType.JSON),
-# ]
-# chunk_schema = CollectionSchema(chunk_fields, description="video search collection", enable_dynamic_field=False)
-# video_schema = CollectionSchema(video_fields, description="summary search collection", enable_dynamic_field=False)
-# collection = Collection(name=CHUNK_COLLECTION, schema=chunk_schema, using='default')
-# collection.create_index(field_name="embedding", index_params=index_params)
-# video_collection = Collection(name=VIDEO_COLLECTION, schema=video_schema, using='default')
-# video_collection.create_index(field_name="embedding", index_params=index_params)
-
+index_params = {
+    "metric_type": "IP",
+    "index_type": "IVF_FLAT",
+    "params": {"nlist": 128}
+}
+chunk_fields = [
+    # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+    FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
+    FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+    FieldSchema(name="metadata", dtype=DataType.JSON),
+]
+video_fields = [
+    # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+    FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
+    FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+    FieldSchema(name="metadata", dtype=DataType.JSON),
+]
+chunk_schema = CollectionSchema(chunk_fields, description="video search collection", enable_dynamic_field=False)
+video_schema = CollectionSchema(video_fields, description="summary search collection", enable_dynamic_field=False)
+collection = Collection(name=CHUNK_COLLECTION, schema=chunk_schema, using='default')
+collection.create_index(field_name="embedding", index_params=index_params)
+video_collection = Collection(name=VIDEO_COLLECTION, schema=video_schema, using='default')
+video_collection.create_index(field_name="embedding", index_params=index_params)
+db_type='milvus'
 
 # ------------------------------
 # --- YOLO Obj Detect Config ---
@@ -530,38 +528,32 @@ async def vlm_caption(chunk_path):
     # if embedding:
     if avg_image_embedding:
         try:
-            collection.upsert(
-                # embeddings=[embedding] + [avg_image_embedding],
-                # metadatas=[
-                #     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
-                #     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"image"}
-                #     ],
-                # ids=[chunk_filename+"_text", chunk_filename+"_image"] # Use filename as a unique ID
-                embeddings=[avg_image_embedding],
-                metadatas=[
-                    {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
-                    ],
-                ids=[chunk_filename+"_image"] # Use filename as a unique ID
-            )
-            # entities = [
-            #     [chunk_filename+"_text"],
-            #     [avg_image_embedding],
-            #     [{"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"}]
-            # ]
-            # collection.upsert(entities)
+            if db_type=='chroma':
+                collection.upsert(
+                    # embeddings=[embedding] + [avg_image_embedding],
+                    # metadatas=[
+                    #     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
+                    #     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"image"}
+                    #     ],
+                    # ids=[chunk_filename+"_text", chunk_filename+"_image"] # Use filename as a unique ID
+                    embeddings=[avg_image_embedding],
+                    metadatas=[
+                        {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
+                        ],
+                    ids=[chunk_filename+"_image"] # Use filename as a unique ID
+                )
+            elif db_type=='milvus':
+                entities = [
+                    [chunk_filename+"_text"],
+                    [avg_image_embedding],
+                    [{"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"}]
+                ]
+                collection.upsert(entities)
             print(f"Added embedding for {chunk_filename} to ChromaDB.")
         except Exception as e:
             print(f"Error adding to ChromaDB: {e}")
     return caption
 
-    # # Save into Milvus
-    # if avg_image_embedding is not None:
-    #     res = milvus_client.insert(collection_name=COLLECTION_NAME, 
-    #                         data=[
-    #                             {'vector': avg_image_embedding,
-    #                             'metadata':{"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type": "image"}}
-    #                         ])
-    return caption
 
 def parse_json(json_string):
     json_string = json_string.replace('```json','').replace('```','')
@@ -629,26 +621,22 @@ async def create_aggregated_summary(video_path):
     embedding = encode_text([final_summary], processor, embedding_model, device=device)[0][0]
     if embedding:
         try:
-            video_collection.upsert(
-                embeddings=[embedding],
-                metadatas=[{"video_name": video_name, "summary": final_summary, "video_path": video_path}],
-                ids=[video_name] # Use filename as a unique ID
-            )
-            # entities = [
-            #     [video_name],
-            #     [embedding],
-            #     [{"video_name": video_name, "summary": final_summary, "video_path": video_path}]
-            # ]
-            # video_collection.upsert(entities)
+            if db_type=='chroma':
+                video_collection.upsert(
+                    embeddings=[embedding],
+                    metadatas=[{"video_name": video_name, "summary": final_summary, "video_path": video_path}],
+                    ids=[video_name] # Use filename as a unique ID
+                )
+            elif db_type=='milvus':
+                entities = [
+                    [video_name],
+                    [embedding],
+                    [{"video_name": video_name, "summary": final_summary, "video_path": video_path}]
+                ]
+                video_collection.upsert(entities)
             print(f"Added embedding for {video_name} to ChromaDB.")
         except Exception as e:
             print(f"Error adding to ChromaDB: {e}")
-    # if embedding is not None:
-    #     res = milvus_client.insert(collection_name=VIDEO_COLLECTION_NAME, 
-    #                         data=[
-    #                             {'vector': embedding,
-    #                             'metadata':{"video_name": video_name, "summary": final_summary, "video_path": video_path}}
-    #                         ])
 
 
 async def vlm_caption_all(chunk_paths):

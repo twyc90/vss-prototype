@@ -119,35 +119,7 @@ MILVUS_DB_PATH = "./out/milvus.db"
 CHUNK_COLLECTION = "chunk_captions"
 VIDEO_COLLECTION = "video_captions"
 connections.connect("default", uri=MILVUS_DB_PATH)
-# with torch.no_grad():
-#     dummy = processor(text="hello", return_tensors="pt").to(device)
-#     dim = embedding_model.get_text_features(**dummy).shape[-1]
-# print(f'Embedding size: {dim}')
-
-index_params = {
-    "metric_type": "IP",
-    "index_type": "IVF_FLAT",
-    "params": {"nlist": 128}
-}
-# chunk_fields = [
-#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
-#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
-#     FieldSchema(name="metadata", dtype=DataType.JSON),
-# ]
-# video_fields = [
-#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
-#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
-#     FieldSchema(name="metadata", dtype=DataType.JSON),
-# ]
-# chunk_schema = CollectionSchema(chunk_fields, description="video search collection", enable_dynamic_field=False)
-# video_schema = CollectionSchema(video_fields, description="summary search collection", enable_dynamic_field=False)
-# collection = Collection(name=CHUNK_COLLECTION, schema=chunk_schema, using='default')
-# collection.create_index(field_name="embedding", index_params=index_params)
-# video_collection = Collection(name=VIDEO_COLLECTION, schema=video_schema, using='default')
-# video_collection.create_index(field_name="embedding", index_params=index_params)
-
+db_type = 'milvus'
 
 # --------------------------------------
 # --- Caching Models for Performance ---
@@ -163,19 +135,20 @@ def load_models():
     return embedding_model, reranker_model, processor
 
 @st.cache_resource
-def load_chroma_collection():
-    if not os.path.exists(OUTPUT_CHROMA_DIR):
-        st.error(f"ChromaDB directory not found at '{OUTPUT_CHROMA_DIR}'. Please run the processing script first.")
-        return None
-    client = chromadb.PersistentClient(path=OUTPUT_CHROMA_DIR)
-    collection = client.get_collection(name=COLLECTION_NAME)
-    video_collection = client.get_collection(name=VIDEO_COLLECTION_NAME)
-    print("Collection loaded successfully.")
-    return collection, video_collection
-    # chunk_collection = Collection(CHUNK_COLLECTION)
-    # video_collection = Collection(VIDEO_COLLECTION)
-    # return collection, video_collection
-
+def load_collection():
+    if db_type=='chroma':
+        if not os.path.exists(OUTPUT_CHROMA_DIR):
+            st.error(f"ChromaDB directory not found at '{OUTPUT_CHROMA_DIR}'. Please run the processing script first.")
+            return None
+        client = chromadb.PersistentClient(path=OUTPUT_CHROMA_DIR)
+        collection = client.get_collection(name=COLLECTION_NAME)
+        video_collection = client.get_collection(name=VIDEO_COLLECTION_NAME)
+        print("Collection loaded successfully.")
+        return collection, video_collection
+    else:
+        chunk_collection = Collection(CHUNK_COLLECTION)
+        video_collection = Collection(VIDEO_COLLECTION)
+        return chunk_collection, video_collection
 
 
 def search_and_rerank(query_text=None, query_image=None, query_video=None, processor=None, embedding_model=None, reranker_model=None, collection=None, top_n=50, rerank_top_k=10, min_score=0.6):
@@ -193,7 +166,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
     elif query_image:
         img = Image.open(query_image)
         emb_image = encode_image([img], processor, embedding_model, device=device)[0]
-        query_embedding = emb_image
+        query_embedding = np.array(emb_image, dtype=np.float32).tolist()
     elif query_video:
         cap = cv2.VideoCapture(query_video)
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -211,34 +184,72 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
         pil_frames = [Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) for frame in sampled_frames]
         query_embedding = encode_video(pil_frames, processor, embedding_model, device=device)
 
-    search_results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_n,
-        include=['metadatas','documents','embeddings','distances'],
-        # where={'type':type}
-    )
+    if db_type=='chroma':
+        search_results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_n,
+            include=['metadatas','documents','embeddings','distances'],
+            # where={'type':type}
+        )
+    else:
+        collection.load()
+        search_results = collection.search(
+            data=[query_embedding],
+            anns_field="embedding",
+            param={"metric_type": "IP","index_type": "IVF_FLAT","params": {"nlist": 128}},
+            limit=top_n,
+            output_fields=["metadata","embedding"]
+        )
 
     if type=='text':
         rerank_pairs = []
-        for metadata in search_results['metadatas'][0]:
-            rerank_pairs.append([query_text, metadata.get('caption', '')])
+        if db_type=='chroma':
+            for metadata in search_results['metadatas'][0]:
+                rerank_pairs.append([query_text, metadata.get('caption', '')])
+        elif db_type=='milvus':
+            for result in search_results:
+                metadata = result[0]['metadata']
+                rerank_pairs.append([query_text, metadata.get('caption', '')])
+
         rerank_scores = reranker_model.compute_score(rerank_pairs)
         rerank_scores = torch.sigmoid(torch.tensor(rerank_scores)).tolist()
         reranked_chunks = []
-        for i, meta in enumerate(search_results['metadatas'][0]):
-            reranked_chunks.append({
-                'metadata': meta,
-                'rerank_score': rerank_scores[i]
-            })
+
+        if db_type=='chroma':
+            for i, meta in enumerate(search_results['metadatas'][0]):
+                reranked_chunks.append({
+                    'metadata': meta,
+                    'rerank_score': rerank_scores[i]
+                })
+        elif db_type=='milvus':
+            for i, result in enumerate(search_results):
+                meta = result[0]['metadata']
+                reranked_chunks.append({
+                    'metadata': meta,
+                    'rerank_score': rerank_scores[i]
+                })
+
         reranked_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
         top_chunks = reranked_chunks
+
     elif type=='image':
         matched_chunks = []
-        for meta, distance in zip(search_results['metadatas'][0], search_results['distances'][0]):
-            matched_chunks.append({
-                'metadata': meta,
-                'rerank_score': 1-distance
-            })
+
+        if db_type=='chroma':
+            for meta, distance in zip(search_results['metadatas'][0], search_results['distances'][0]):
+                matched_chunks.append({
+                    'metadata': meta,
+                    'rerank_score': 1-distance
+                })
+        elif db_type=='milvus':
+            for i, result in enumerate(search_results):
+                meta = result[0]['metadata']
+                distance = result[0]['distance']
+                matched_chunks.append({
+                    'metadata': meta,
+                    'rerank_score': distance
+                })
+
         matched_chunks.sort(key=lambda x: x['rerank_score'], reverse=True)
         top_chunks = matched_chunks
 
@@ -262,24 +273,34 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
                 video_results[video_name]['best_score'] = chunk['rerank_score']
     final_list = sorted(video_results.values(), key=lambda x: x['best_score'], reverse=True)
     final_list = sorted([v for v in video_results.values() if v['best_score']>=min_score], key=lambda x: x['best_score'], reverse=True)
+    
     return final_list[:rerank_top_k]
 
 
 def browse_collection(collection, limit=30):
     if not collection:
         return []
-    results = collection.get(
-        limit=limit,
-        include=["metadatas","embeddings"]
-    )
-
-    formatted_results = []
-    # ids = set()
-    for id, meta, emb in zip(results['ids'], results['metadatas'], results['embeddings']):
-        # if meta['video_name'] not in ids:
-        formatted_results.append({'metadata': meta, 'embedding':emb})
-            # ids.add(meta['video_name'])
-    return formatted_results
+    if db_type=='chroma':
+        results = collection.get(
+            limit=limit,
+            include=["metadatas","embeddings"]
+        )
+        formatted_results = []
+        for id, meta, emb in zip(results['ids'], results['metadatas'], results['embeddings']):
+            formatted_results.append({'metadata': meta, 'embedding':emb})
+        return formatted_results
+    else:
+        collection.load()
+        results = collection.query(
+            expr="",
+            limit=limit,
+            output_fields=["metadata","embedding"]
+        )
+        formatted_results = []
+        for result in results:
+            id, meta, emb = result['id'], result['metadata'], result['embedding']
+            formatted_results.append({'metadata': meta, 'embedding':emb})
+        return formatted_results
 
 
 def parse_json(json_string):
@@ -322,7 +343,10 @@ def display_results(results_list):
                     st.text(f"- {' | '.join(str(v) for v in feature.values())}")
                 st.markdown(f"**Source**: {type}")
                 with st.expander("Embeddings"):
-                    st.text(f"{', '.join([str(e) for e in emb.tolist()])}")
+                    if db_type=='chroma':
+                        st.text(f"{', '.join([str(e) for e in emb.tolist()])}")
+                    else:
+                        st.text(f"{', '.join([str(e) for e in emb])}")
             else:
                 st.markdown(f"**Caption:** `{caption_str}`")
             if 'rerank_score' in result:
@@ -473,7 +497,7 @@ with _col2:
 
 # Load models and collection
 embedding_model, reranker_model, processor = load_models()
-collection, video_collection = load_chroma_collection()
+collection, video_collection = load_collection()
 
 # --- Create Tabs ---
 tab1, tab2, tab3 = _col2.tabs(["🔎 Search Chunk by Query", "📚 Browse Chunks", "📜 Browse Video Summaries"])
