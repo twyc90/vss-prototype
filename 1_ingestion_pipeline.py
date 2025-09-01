@@ -544,9 +544,9 @@ async def vlm_caption(chunk_path):
                 )
             elif db_type=='milvus':
                 entities = [
-                    [chunk_filename+"_text"],
+                    [chunk_filename+"_image"],
                     [avg_image_embedding],
-                    [{"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"}]
+                    [{"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"image"}]
                 ]
                 collection.upsert(entities)
             print(f"Added embedding for {chunk_filename} to ChromaDB.")

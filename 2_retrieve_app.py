@@ -198,7 +198,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
             anns_field="embedding",
             param={"metric_type": "IP","index_type": "IVF_FLAT","params": {"nlist": 128}},
             limit=top_n,
-            output_fields=["metadata","embedding"]
+            output_fields=["metadata"]
         )
 
     if type=='text':
@@ -207,10 +207,10 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
             for metadata in search_results['metadatas'][0]:
                 rerank_pairs.append([query_text, metadata.get('caption', '')])
         elif db_type=='milvus':
-            for result in search_results:
-                metadata = result[0]['metadata']
+            for result in search_results[0]:
+                metadata = result['metadata']
                 rerank_pairs.append([query_text, metadata.get('caption', '')])
-
+        
         rerank_scores = reranker_model.compute_score(rerank_pairs)
         rerank_scores = torch.sigmoid(torch.tensor(rerank_scores)).tolist()
         reranked_chunks = []
@@ -222,8 +222,8 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
                     'rerank_score': rerank_scores[i]
                 })
         elif db_type=='milvus':
-            for i, result in enumerate(search_results):
-                meta = result[0]['metadata']
+            for i, result in enumerate(search_results[0]):
+                meta = result['metadata']
                 reranked_chunks.append({
                     'metadata': meta,
                     'rerank_score': rerank_scores[i]
@@ -242,9 +242,9 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
                     'rerank_score': 1-distance
                 })
         elif db_type=='milvus':
-            for i, result in enumerate(search_results):
-                meta = result[0]['metadata']
-                distance = result[0]['distance']
+            for i, result in enumerate(search_results[0]):
+                meta = result['metadata']
+                distance = result['distance']
                 matched_chunks.append({
                     'metadata': meta,
                     'rerank_score': distance
@@ -293,6 +293,7 @@ def browse_collection(collection, limit=30):
         collection.load()
         results = collection.query(
             expr="",
+            filter="RANDOM_SAMPLE(0.1)",
             limit=limit,
             output_fields=["metadata","embedding"]
         )
