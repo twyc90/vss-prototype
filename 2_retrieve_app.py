@@ -12,6 +12,8 @@ import torch
 import numpy as np
 from PIL import Image
 import tempfile
+from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
+from pymilvus import MilvusClient
 
 # --------------
 # --- CONFIG ---
@@ -49,13 +51,19 @@ def encode_text(texts, processor, model, device="cpu", normalize=True, max_lengt
             tokens = processor(text=text, return_tensors="pt", add_special_tokens=True)
             input_ids = tokens["input_ids"][0]
             if len(input_ids) <= max_length:
-                print('normal encode')
-                inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
+                # normal encode
+                inputs = processor(
+                    text=text,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=max_length
+                ).to(device)
                 with torch.no_grad():
                     outputs = model.get_text_features(**inputs)
                 emb = outputs.cpu().numpy()
             else:
-                print('chunk and mean encode')
+                # chunk and mean encode
                 chunks = [input_ids[i:i+max_length] for i in range(0, len(input_ids), max_length)]
                 chunk_embs = []
                 for chunk in chunks:
@@ -64,11 +72,17 @@ def encode_text(texts, processor, model, device="cpu", normalize=True, max_lengt
                         outputs = model.get_text_features(**inputs)
                     chunk_embs.append(outputs.cpu().numpy())
                 emb = np.mean(chunk_embs, axis=0)
+            # normalize
             if normalize:
-                emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+                if emb.ndim == 1:
+                    emb = emb / np.linalg.norm(emb)
+                else:
+                    emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+            embeddings.append(emb.tolist())
     except Exception as e:
-        print(f'Encoding error. {e}')
-    return emb.tolist()
+        print(f"Encoding error: {e}")
+        return None
+    return embeddings
 
 
 def encode_image(images, processor, model, device="cpu", normalize=True):
@@ -98,6 +112,43 @@ def encode_video(pil_frames, processor, model, device="cpu", normalize=True):
     return avg_image_embedding
 
 
+# # ------------------------
+# # --- Milvus Lite Setup ---
+# # ------------------------
+MILVUS_DB_PATH = "./out/milvus.db"
+CHUNK_COLLECTION = "chunk_captions"
+VIDEO_COLLECTION = "video_captions"
+connections.connect("default", uri=MILVUS_DB_PATH)
+# with torch.no_grad():
+#     dummy = processor(text="hello", return_tensors="pt").to(device)
+#     dim = embedding_model.get_text_features(**dummy).shape[-1]
+# print(f'Embedding size: {dim}')
+
+index_params = {
+    "metric_type": "IP",
+    "index_type": "IVF_FLAT",
+    "params": {"nlist": 128}
+}
+# chunk_fields = [
+#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
+#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+#     FieldSchema(name="metadata", dtype=DataType.JSON),
+# ]
+# video_fields = [
+#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
+#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+#     FieldSchema(name="metadata", dtype=DataType.JSON),
+# ]
+# chunk_schema = CollectionSchema(chunk_fields, description="video search collection", enable_dynamic_field=False)
+# video_schema = CollectionSchema(video_fields, description="summary search collection", enable_dynamic_field=False)
+# collection = Collection(name=CHUNK_COLLECTION, schema=chunk_schema, using='default')
+# collection.create_index(field_name="embedding", index_params=index_params)
+# video_collection = Collection(name=VIDEO_COLLECTION, schema=video_schema, using='default')
+# video_collection.create_index(field_name="embedding", index_params=index_params)
+
+
 # --------------------------------------
 # --- Caching Models for Performance ---
 # --------------------------------------
@@ -121,6 +172,10 @@ def load_chroma_collection():
     video_collection = client.get_collection(name=VIDEO_COLLECTION_NAME)
     print("Collection loaded successfully.")
     return collection, video_collection
+    # chunk_collection = Collection(CHUNK_COLLECTION)
+    # video_collection = Collection(VIDEO_COLLECTION)
+    # return collection, video_collection
+
 
 
 def search_and_rerank(query_text=None, query_image=None, query_video=None, processor=None, embedding_model=None, reranker_model=None, collection=None, top_n=50, rerank_top_k=10, min_score=0.6):
@@ -133,7 +188,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
 
     query_embedding = []
     if query_text:
-        emb_text = encode_text([query_text], processor, embedding_model, device=device)[0]
+        emb_text = encode_text([query_text], processor, embedding_model, device=device)[0][0]
         query_embedding = emb_text
     elif query_image:
         img = Image.open(query_image)
@@ -162,6 +217,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
         include=['metadatas','documents','embeddings','distances'],
         # where={'type':type}
     )
+
     if type=='text':
         rerank_pairs = []
         for metadata in search_results['metadatas'][0]:
@@ -216,6 +272,7 @@ def browse_collection(collection, limit=30):
         limit=limit,
         include=["metadatas","embeddings"]
     )
+
     formatted_results = []
     # ids = set()
     for id, meta, emb in zip(results['ids'], results['metadatas'], results['embeddings']):
@@ -290,8 +347,8 @@ def display_results(results_list):
                             if objects:
                                 for obj in objects:
                                     label = obj.get('label', 'N/A')
-                                    confidence = obj.get('last_confidence') 
-                                    st.markdown(f"**Object ID {obj.get('id', 'N/A')}**: `{label}` (Confidence: `{confidence:.2f}`)")
+                                    confidence = obj.get('best_confidence') 
+                                    st.markdown(f"**Object ID {obj.get('id', 'N/A')}**: `{label}` (Best Confidence: `{confidence:.2f}`)")
                             else:
                                 st.write("No objects were tracked in this video chunk.")
                         except Exception as e:

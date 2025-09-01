@@ -17,6 +17,9 @@ from openai import OpenAI, AsyncOpenAI
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
 from PIL import Image
+from collections import defaultdict
+from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
+from pymilvus import MilvusClient
 
 # --------------
 # --- Config ---
@@ -25,6 +28,7 @@ DATA_DIR = "./data/videos"
 OUTPUT_DIR = "./out"
 OUTPUT_CHUNK_DIR = "./out/video_chunks"
 ANNOTATED_CHUNK_DIR = "./out/video_chunks_cv"
+CV_CHUNK_DIR = "./out/video_chunks_cv/obj"
 OUTPUT_METADATA_DIR = "./out/metadata"
 OUTPUT_CHROMA_DIR = "./out/chroma_db"
 SAVE_CHUNKS = True
@@ -33,6 +37,7 @@ FRAMES_PER_CHUNK = 8     # frames per chunk
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_CHUNK_DIR, exist_ok=True)
 os.makedirs(ANNOTATED_CHUNK_DIR, exist_ok=True)
+os.makedirs(CV_CHUNK_DIR, exist_ok=True)
 os.makedirs(OUTPUT_METADATA_DIR, exist_ok=True)
 os.makedirs(OUTPUT_CHROMA_DIR, exist_ok=True)
 
@@ -65,6 +70,44 @@ EMBEDDING_MODEL_NAME = 'BAAI/BGE-VL-base'
 processor = AutoProcessor.from_pretrained(EMBEDDING_MODEL_NAME)
 embedding_model = AutoModel.from_pretrained(EMBEDDING_MODEL_NAME).to(device)
 
+
+# # ------------------------
+# # --- Milvus Lite Setup ---
+# # ------------------------
+# MILVUS_DB_PATH = "./out/milvus.db"
+# CHUNK_COLLECTION = "chunk_captions"
+# VIDEO_COLLECTION = "video_captions"
+# connections.connect("default", uri=MILVUS_DB_PATH)
+# with torch.no_grad():
+#     dummy = processor(text="hello", return_tensors="pt").to(device)
+#     dim = embedding_model.get_text_features(**dummy).shape[-1]
+# print(f'Embedding size: {dim}')
+
+# index_params = {
+#     "metric_type": "IP",
+#     "index_type": "IVF_FLAT",
+#     "params": {"nlist": 128}
+# }
+# chunk_fields = [
+#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
+#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+#     FieldSchema(name="metadata", dtype=DataType.JSON),
+# ]
+# video_fields = [
+#     # FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+#     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=512),
+#     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+#     FieldSchema(name="metadata", dtype=DataType.JSON),
+# ]
+# chunk_schema = CollectionSchema(chunk_fields, description="video search collection", enable_dynamic_field=False)
+# video_schema = CollectionSchema(video_fields, description="summary search collection", enable_dynamic_field=False)
+# collection = Collection(name=CHUNK_COLLECTION, schema=chunk_schema, using='default')
+# collection.create_index(field_name="embedding", index_params=index_params)
+# video_collection = Collection(name=VIDEO_COLLECTION, schema=video_schema, using='default')
+# video_collection.create_index(field_name="embedding", index_params=index_params)
+
+
 # ------------------------------
 # --- YOLO Obj Detect Config ---
 # ------------------------------
@@ -94,13 +137,19 @@ def encode_text(texts, processor, model, device="cpu", normalize=True, max_lengt
             tokens = processor(text=text, return_tensors="pt", add_special_tokens=True)
             input_ids = tokens["input_ids"][0]
             if len(input_ids) <= max_length:
-                print('normal encode')
-                inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
+                # normal encode
+                inputs = processor(
+                    text=text,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=max_length
+                ).to(device)
                 with torch.no_grad():
                     outputs = model.get_text_features(**inputs)
                 emb = outputs.cpu().numpy()
             else:
-                print('chunk and mean encode')
+                # chunk and mean encode
                 chunks = [input_ids[i:i+max_length] for i in range(0, len(input_ids), max_length)]
                 chunk_embs = []
                 for chunk in chunks:
@@ -109,11 +158,45 @@ def encode_text(texts, processor, model, device="cpu", normalize=True, max_lengt
                         outputs = model.get_text_features(**inputs)
                     chunk_embs.append(outputs.cpu().numpy())
                 emb = np.mean(chunk_embs, axis=0)
+            # normalize
             if normalize:
-                emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+                if emb.ndim == 1:
+                    emb = emb / np.linalg.norm(emb)
+                else:
+                    emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+            embeddings.append(emb.tolist())
     except Exception as e:
-        print(f'Encoding error. {e}')
-    return emb.tolist()
+        print(f"Encoding error: {e}")
+        return None
+    return embeddings
+
+# def encode_text(texts, processor, model, device="cpu", normalize=True, max_length=77):
+#     embeddings = []
+#     try:
+#         for text in texts:
+#             tokens = processor(text=text, return_tensors="pt", add_special_tokens=True)
+#             input_ids = tokens["input_ids"][0]
+#             if len(input_ids) <= max_length:
+#                 print('normal encode')
+#                 inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
+#                 with torch.no_grad():
+#                     outputs = model.get_text_features(**inputs)
+#                 emb = outputs.cpu().numpy()
+#             else:
+#                 print('chunk and mean encode')
+#                 chunks = [input_ids[i:i+max_length] for i in range(0, len(input_ids), max_length)]
+#                 chunk_embs = []
+#                 for chunk in chunks:
+#                     inputs = {"input_ids": chunk.unsqueeze(0).to(device)}
+#                     with torch.no_grad():
+#                         outputs = model.get_text_features(**inputs)
+#                     chunk_embs.append(outputs.cpu().numpy())
+#                 emb = np.mean(chunk_embs, axis=0)
+#             if normalize:
+#                 emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+#     except Exception as e:
+#         print(f'Encoding error. {e}')
+#     return emb.tolist()
 
 def encode_image(images, processor, model, device="cpu", normalize=True):
     try:
@@ -201,7 +284,6 @@ def has_motion_bgsub(video_path, min_motion_frames=5):
     return motion_frames >= min_motion_frames
 
 
-from collections import defaultdict
 def detect_and_track_objects(chunk_paths):
     chunk_cv_paths = []
     for chunk_path in chunk_paths:
@@ -227,7 +309,7 @@ def detect_and_track_objects(chunk_paths):
             cap.release()
             out.release()
             os.remove(output_video_path)
-            return
+            continue
 
         chunk_cv_paths.append(output_video_path)
         tracked_objects = {}
@@ -242,13 +324,12 @@ def detect_and_track_objects(chunk_paths):
             for result in results:
                 for box in result.boxes:
                     if box.conf[0] > CONFIDENCE_THRESHOLD:
-                        coords_float = box.xyxy[0].cpu().numpy()
-                        coords = coords_float.astype(int)
+                        # coords_float = box.xyxy[0].cpu().numpy().tolist()
+                        coords = box.xyxy[0].cpu().numpy().astype(int).tolist()
                         class_id = int(box.cls[0].cpu().numpy())
                         class_name = model.names[class_id]
-                        center_x = (coords_float[0] + coords_float[2]) / 2
-                        center_y = (coords_float[1] + coords_float[3]) / 2
-                        
+                        center_x = (coords[0] + coords[2]) / 2
+                        center_y = (coords[1] + coords[3]) / 2
                         confidence = box.conf[0].cpu().numpy().item()
                         found_match = False
                         display_id = -1
@@ -256,13 +337,18 @@ def detect_and_track_objects(chunk_paths):
                             dist = np.sqrt((center_x - obj_data['last_pos'][0])**2 + (center_y - obj_data['last_pos'][1])**2)
                             if obj_data['label'] == class_name and dist < 75:
                                 obj_data['last_pos'] = (center_x, center_y)
-                                if frame_idx not in obj_data['frames_present']:
-                                    obj_data['frames_present'].append(frame_idx)
-                                    obj_data['obj_bbox'][frame_idx] = [coords[0], coords[1], coords[2], coords[3]]
+                                # if frame_idx not in obj_data['frames_present']:
+                                #     obj_data['frames_present'].append(frame_idx)
+                                #     obj_data['obj_bbox'][frame_idx] = {frame_idx: coords}
+                                # update best bbox if confidence higher
+                                if confidence > obj_data['best_confidence']:
+                                    obj_data['best_frame_idx'] = frame_idx
+                                    obj_data['best_confidence'] = confidence
+                                    obj_data['best_bbox'] = coords
+                                    obj_data['best_frame'] = frame.copy()
                                 found_match = True
                                 display_id = obj_id
                                 break
-                        
                         if not found_match:
                             display_id = next_object_id
                             tracked_objects[display_id] = {
@@ -270,28 +356,48 @@ def detect_and_track_objects(chunk_paths):
                                 'label': class_name,
                                 'initial_pos': (center_x, center_y),
                                 'last_pos': (center_x, center_y),
-                                'frames_present': [frame_idx],
-                                'obj_bbox': {frame_idx: [coords[0], coords[1], coords[2], coords[3]]},
-                                'last_confidence': confidence
+                                # 'frames_present': [frame_idx],
+                                # 'obj_bbox': {frame_idx: coords},
+                                # 'last_confidence': confidence,
+                                'best_frame_idx': frame_idx,
+                                'best_bbox': coords,
+                                'best_confidence': confidence,
+                                'best_frame': frame.copy()
                             }
                             next_object_id += 1
-
-                        label = f"ID {display_id}: {class_name} {box.conf[0]:.3f}"
+                        label = f"ID {display_id}: {class_name} {confidence:.3f}"
                         latest_boxes_to_draw.append((coords, label))
             for coords, label in latest_boxes_to_draw:
-                cv2.rectangle(frame, (coords[0], coords[1]), (coords[2], coords[3]), (0, 255, 0), 2)
-                cv2.putText(frame, label, (coords[0], coords[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                x1, y1, x2, y2 = coords
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             out.write(frame)
             frame_idx += 1
+        # save crops of best bboxes
+        for obj in tracked_objects.values():
+            x1, y1, x2, y2 = obj['best_bbox']
+            frame = obj['best_frame']
+            label = obj['label']
+            conf = obj['best_confidence']
+            # crop region
+            crop = frame[y1:y2, x1:x2].copy()
+            # draw bbox (relative to crop)
+            h, w = crop.shape[:2]
+            cv2.rectangle(crop, (0, 0), (w - 1, h - 1), (0, 255, 0), 2)
+            # put label + confidence
+            text = f"{label} {conf:.2f}"
+            cv2.putText(crop, text, (5, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (0, 255, 0), 2, lineType=cv2.LINE_AA)
+            # save annotated crop
+            crop_path = os.path.join(CV_CHUNK_DIR, f"{os.path.basename(chunk_path)}_obj{obj['id']}.jpg")
+            cv2.imwrite(crop_path, crop)
+            obj['crop_path'] = crop_path
+            obj.pop("best_frame", None)
         chunk_metadata["objects"] = list(tracked_objects.values())
         metadata_filename = os.path.basename(chunk_path).replace(os.path.splitext(chunk_path)[1], '.json')
         metadata_path = os.path.join(OUTPUT_METADATA_DIR, metadata_filename)
         with open(metadata_path, 'w') as f:
-            def convert(o):
-                if isinstance(o, np.generic): return o.item()  
-                raise TypeError
-            json.dump(chunk_metadata, f, indent=4, default=convert)
-        
+            json.dump(chunk_metadata, f, indent=4)
         cap.release()
         out.release()
     return chunk_cv_paths
@@ -328,52 +434,51 @@ async def vlm_caption(chunk_path):
         if objects:
             for obj in objects:
                 label = obj.get('label', 'N/A')
-                confidence = obj.get('last_confidence')
-                cv_metadata.append(f"Object ID {obj.get('id', 'N/A')}: {label}, Confidence: {confidence:.3f}")
+                confidence = obj.get('best_confidence')
+                cv_metadata.append(f"Object ID {obj.get('id', 'N/A')}: {label}, Best Confidence: {confidence:.3f}")
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": (
         "These are sequential frames from a video clip.\n"
-        "Objects detected are bounded by a green color box.\n"
+        "Objects detected are bounded by a green color box, top left corner of each box shows the object ID, object label and object confidence.\n"
         "You are now expert investigation officer that looks for distinguished and/or suspicious feature from video clips for national security concerns.\n"
-        "1. Identify all the individuals and determine their features such as clothing, appearance, etc and deduce what they are doing.\n"
-        "2. Identify all objects like car, personal mobility devices (PMD), bicycle, scooter, etc and record their color and features.\n"
-        "3. Identify suspicious objects like unclaimed bag in the middle of a bus stop that looked suspicious, etc and provide the description\n"
-        "4. Assign ID, label and confidence of the individual/objects based on the bounding box and the CV metadata if available\n"
-        "5. Record the likely location of the video clip, such as bus stop, shopping mall, restaurant, MRT, MBS, etc\n"
+        "1. Identify all the human objects detected and return their features such as clothing, appearance, etc and deduce what they are doing.\n"
+        "2. Identify all the nonhuman objects like car, personal mobility devices (PMD), bicycle, scooter, etc and record their color and features.\n"
+        "3. Identify all the suspicious objects like unclaimed bag in the middle of a bus stop that looked suspicious, etc and provide the description\n"
+        "5. Identify the likely location of the video clip, such as bus stop, shopping mall, restaurant, MRT, MBS, etc\n"
         "6. Generate a concise one sentence caption for the video clip.\n"
         "7. Return your result in a valid JSON output as per below\n"
         "Example : "
         "        ------CHUNK DATA START HERE------\n"
         "        CV METADATA:\n        "
-        "        Object ID 0: person, Confidence: 0.851"
-        "        Object ID 1: bus, Confidence: 0.523"
-        "        Object ID 2: car, Confidence: 0.995"
-        "        Object ID 3: person, Confidence: 0.926"
+        "        Object ID 0: person, Best Confidence: 0.851"
+        "        Object ID 1: bus, Best Confidence: 0.523"
+        "        Object ID 2: car, Best Confidence: 0.995"
+        "        Object ID 3: person, Best Confidence: 0.926"
         "Output : "
         '''
         {
         "Features": [
         {
-        "tracker": "Young man: (Object ID 0: person, Confidence: 0.851)",
         "description": "A young man wearing a backpack, jeans, and a light-colored shirt. He appears to be looking at his phone. There is a red color handbag on the floor near to him.",
+        "tracker": "Young man",
         "location": "Standing near the edge of a bus stop shelter.",
         },
         {
-        "tracker": "Bus: (Object ID 1: bus, Confidence: 0.523)",
         ""description": "A green color SG bus with number 298",
+        "tracker": "Bus",
         "location": "On the road",
         },
         {
-        "tracker": "Car: (Object ID 2: car, Confidence: 0.995)",
         ""description": "A bright yellow color Honda civic",
+        "tracker": "Car",
         "location": "On the road",
         },
         {
-        "tracker": "Elderly Woman: (Object ID 3: person, Confidence 0.926)",
         ""description": "An elderly woman wearing a dark jacket and seated on the bus stop bench.",
+        "tracker": "Elderly Woman",
         "location": "Seated on the bus stop bench."
         }],
         "Video Summary": 
@@ -412,7 +517,7 @@ async def vlm_caption(chunk_path):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    embedding = encode_text([caption], processor, embedding_model, device=device)[0]
+    embedding = encode_text([caption], processor, embedding_model, device=device)[0][0]
     pil_frames = [Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) for frame in sampled_frames]
     image_embeddings = encode_image(pil_frames, processor, embedding_model, device=device)
     if len(image_embeddings)>1:
@@ -422,19 +527,40 @@ async def vlm_caption(chunk_path):
     else:
         avg_image_embedding = image_embeddings[0]
 
-    if embedding:
+    # if embedding:
+    if avg_image_embedding:
         try:
             collection.upsert(
-                embeddings=[embedding] + [avg_image_embedding],
+                # embeddings=[embedding] + [avg_image_embedding],
+                # metadatas=[
+                #     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
+                #     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"image"}
+                #     ],
+                # ids=[chunk_filename+"_text", chunk_filename+"_image"] # Use filename as a unique ID
+                embeddings=[avg_image_embedding],
                 metadatas=[
                     {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"},
-                    {"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"image"}
                     ],
-                ids=[chunk_filename+"_text", chunk_filename+"_image"] # Use filename as a unique ID
+                ids=[chunk_filename+"_image"] # Use filename as a unique ID
             )
+            # entities = [
+            #     [chunk_filename+"_text"],
+            #     [avg_image_embedding],
+            #     [{"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type":"text"}]
+            # ]
+            # collection.upsert(entities)
             print(f"Added embedding for {chunk_filename} to ChromaDB.")
         except Exception as e:
             print(f"Error adding to ChromaDB: {e}")
+    return caption
+
+    # # Save into Milvus
+    # if avg_image_embedding is not None:
+    #     res = milvus_client.insert(collection_name=COLLECTION_NAME, 
+    #                         data=[
+    #                             {'vector': avg_image_embedding,
+    #                             'metadata':{"video_name": chunk_filename, "chunk_path": chunk_path, "caption": caption, "type": "image"}}
+    #                         ])
     return caption
 
 def parse_json(json_string):
@@ -500,7 +626,7 @@ async def create_aggregated_summary(video_path):
         json.dump(data, f, indent=4)
         f.truncate()
 
-    embedding = encode_text([final_summary], processor, embedding_model, device=device)[0]
+    embedding = encode_text([final_summary], processor, embedding_model, device=device)[0][0]
     if embedding:
         try:
             video_collection.upsert(
@@ -508,9 +634,21 @@ async def create_aggregated_summary(video_path):
                 metadatas=[{"video_name": video_name, "summary": final_summary, "video_path": video_path}],
                 ids=[video_name] # Use filename as a unique ID
             )
+            # entities = [
+            #     [video_name],
+            #     [embedding],
+            #     [{"video_name": video_name, "summary": final_summary, "video_path": video_path}]
+            # ]
+            # video_collection.upsert(entities)
             print(f"Added embedding for {video_name} to ChromaDB.")
         except Exception as e:
             print(f"Error adding to ChromaDB: {e}")
+    # if embedding is not None:
+    #     res = milvus_client.insert(collection_name=VIDEO_COLLECTION_NAME, 
+    #                         data=[
+    #                             {'vector': embedding,
+    #                             'metadata':{"video_name": video_name, "summary": final_summary, "video_path": video_path}}
+    #                         ])
 
 
 async def vlm_caption_all(chunk_paths):
@@ -540,9 +678,6 @@ async def main():
 
     tasks = [process_video(v) for v in video_paths]
     chunks_cv = await asyncio.gather(*tasks)
-    for cv in chunks_cv:
-        if cv is not None:
-            print(cv[0])
     chunks_cv_path = [cv[0] for cv in chunks_cv if cv is not None]
     vlm_results = await vlm_caption_all(chunks_cv_path)
     llm_results = await llm_summarize_all(video_paths)
