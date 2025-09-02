@@ -118,7 +118,7 @@ def encode_video(pil_frames, processor, model, device="cpu", normalize=True):
 MILVUS_DB_PATH = "./out/milvus.db"
 CHUNK_COLLECTION = "chunk_captions"
 VIDEO_COLLECTION = "video_captions"
-connections.connect("default", uri=MILVUS_DB_PATH)
+# connections.connect("default", uri=MILVUS_DB_PATH)
 db_type = 'milvus'
 
 # --------------------------------------
@@ -145,7 +145,8 @@ def load_collection():
         video_collection = client.get_collection(name=VIDEO_COLLECTION_NAME)
         print("Collection loaded successfully.")
         return collection, video_collection
-    else:
+    elif db_type=='milvus':
+        connections.connect("default", uri=MILVUS_DB_PATH)
         chunk_collection = Collection(CHUNK_COLLECTION)
         video_collection = Collection(VIDEO_COLLECTION)
         return chunk_collection, video_collection
@@ -192,6 +193,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
             # where={'type':type}
         )
     else:
+        connections.connect("default", uri=MILVUS_DB_PATH)
         collection.load()
         search_results = collection.search(
             data=[query_embedding],
@@ -200,6 +202,7 @@ def search_and_rerank(query_text=None, query_image=None, query_video=None, proce
             limit=top_n,
             output_fields=["metadata"]
         )
+        connections.disconnect("default")
 
     if type=='text':
         rerank_pairs = []
@@ -289,7 +292,8 @@ def browse_collection(collection, limit=30):
         for id, meta, emb in zip(results['ids'], results['metadatas'], results['embeddings']):
             formatted_results.append({'metadata': meta, 'embedding':emb})
         return formatted_results
-    else:
+    elif db_type=='milvus':
+        connections.connect("default", uri=MILVUS_DB_PATH)
         collection.load()
         results = collection.query(
             expr="",
@@ -301,6 +305,7 @@ def browse_collection(collection, limit=30):
         for result in results:
             id, meta, emb = result['id'], result['metadata'], result['embedding']
             formatted_results.append({'metadata': meta, 'embedding':emb})
+        connections.disconnect("default")
         return formatted_results
 
 
@@ -373,7 +378,7 @@ def display_results(results_list):
                                 for obj in objects:
                                     label = obj.get('label', 'N/A')
                                     confidence = obj.get('best_confidence') 
-                                    st.markdown(f"**Object ID {obj.get('id', 'N/A')}**: `{label}` (Best Confidence: `{confidence:.2f}`)")
+                                    st.markdown(f"**{label} {obj.get('id', 'N/A')}**: (Best Confidence: `{confidence:.3f}`)")
                             else:
                                 st.write("No objects were tracked in this video chunk.")
                         except Exception as e:
@@ -452,8 +457,8 @@ def display_video_results(results_list):
                             if objects:
                                 for obj in objects:
                                     label = obj.get('label', 'N/A')
-                                    confidence = obj.get('last_confidence') 
-                                    st.markdown(f"**Object ID {obj.get('id', 'N/A')}**: `{label}` (Confidence: `{confidence:.2f}`)")
+                                    confidence = obj.get('best_confidence') 
+                                    st.markdown(f"**{label} {obj.get('id', 'N/A')}**, (Best Confidence: `{confidence:.3f}`)")
                             else:
                                 st.write("No objects were tracked in this video chunk.")
                         except Exception as e:
@@ -561,8 +566,8 @@ with tab2:
 
 # --- Browse Video Summaries Tab ---
 with tab3:
-    st.subheader("Browse random aggregated video summaries")
+    st.subheader("Browse random 30 aggregated video summaries")
     if st.button("Load Random Summaries"):
         with st.spinner("Fetching summaries..."):
-            summary_results = browse_collection (video_collection, limit=10)
+            summary_results = browse_collection (video_collection, limit=30)
             display_summary_results(summary_results)

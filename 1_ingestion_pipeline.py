@@ -20,6 +20,7 @@ from PIL import Image
 from collections import defaultdict
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
 from pymilvus import MilvusClient
+from textwrap import dedent
 
 # --------------
 # --- Config ---
@@ -168,33 +169,6 @@ def encode_text(texts, processor, model, device="cpu", normalize=True, max_lengt
         return None
     return embeddings
 
-# def encode_text(texts, processor, model, device="cpu", normalize=True, max_length=77):
-#     embeddings = []
-#     try:
-#         for text in texts:
-#             tokens = processor(text=text, return_tensors="pt", add_special_tokens=True)
-#             input_ids = tokens["input_ids"][0]
-#             if len(input_ids) <= max_length:
-#                 print('normal encode')
-#                 inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
-#                 with torch.no_grad():
-#                     outputs = model.get_text_features(**inputs)
-#                 emb = outputs.cpu().numpy()
-#             else:
-#                 print('chunk and mean encode')
-#                 chunks = [input_ids[i:i+max_length] for i in range(0, len(input_ids), max_length)]
-#                 chunk_embs = []
-#                 for chunk in chunks:
-#                     inputs = {"input_ids": chunk.unsqueeze(0).to(device)}
-#                     with torch.no_grad():
-#                         outputs = model.get_text_features(**inputs)
-#                     chunk_embs.append(outputs.cpu().numpy())
-#                 emb = np.mean(chunk_embs, axis=0)
-#             if normalize:
-#                 emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
-#     except Exception as e:
-#         print(f'Encoding error. {e}')
-#     return emb.tolist()
 
 def encode_image(images, processor, model, device="cpu", normalize=True):
     try:
@@ -228,8 +202,6 @@ def chunk_video(video_path):
         if not frames:
             break
         chunk_filename = f"{video_name}_chunk_{chunk_count}{video_ext}"
-        # indices = np.linspace(0, len(frames) - 1, num=FRAMES_PER_CHUNK, dtype=int)
-        # frames = [frames[i] for i in indices]
         chunk_path = os.path.join(OUTPUT_CHUNK_DIR, chunk_filename)
         chunk_paths.append(chunk_path)
         fourcc = cv2.VideoWriter_fourcc(*'avc1')
@@ -363,7 +335,7 @@ def detect_and_track_objects(chunk_paths):
                                 'best_frame': frame.copy()
                             }
                             next_object_id += 1
-                        label = f"ID {display_id}: {class_name} {confidence:.3f}"
+                        label = f"{class_name} {display_id}: {confidence:.3f}"
                         latest_boxes_to_draw.append((coords, label))
             for coords, label in latest_boxes_to_draw:
                 x1, y1, x2, y2 = coords
@@ -433,66 +405,60 @@ async def vlm_caption(chunk_path):
             for obj in objects:
                 label = obj.get('label', 'N/A')
                 confidence = obj.get('best_confidence')
-                cv_metadata.append(f"Object ID {obj.get('id', 'N/A')}: {label}, Best Confidence: {confidence:.3f}")
+                cv_metadata.append(f"{label} {obj.get('id', 'N/A')}:, Best Confidence: {confidence:.3f}")
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": (
+                    {"type": "text", "text": dedent((
         "These are sequential frames from a video clip.\n"
-        "Objects detected are bounded by a green color box, top left corner of each box shows the object ID, object label and object confidence.\n"
-        "You are now expert investigation officer that looks for distinguished and/or suspicious feature from video clips for national security concerns.\n"
-        "1. Identify all the human objects detected and return their features such as clothing, appearance, etc and deduce what they are doing.\n"
-        "2. Identify all the nonhuman objects like car, personal mobility devices (PMD), bicycle, scooter, etc and record their color and features.\n"
-        "3. Identify all the suspicious objects like unclaimed bag in the middle of a bus stop that looked suspicious, etc and provide the description\n"
-        "5. Identify the likely location of the video clip, such as bus stop, shopping mall, restaurant, MRT, MBS, etc\n"
-        "6. Generate a concise one sentence caption for the video clip.\n"
-        "7. Return your result in a valid JSON output as per below\n"
-        "Example : "
-        "        ------CHUNK DATA START HERE------\n"
-        "        CV METADATA:\n        "
-        "        Object ID 0: person, Best Confidence: 0.851"
-        "        Object ID 1: bus, Best Confidence: 0.523"
-        "        Object ID 2: car, Best Confidence: 0.995"
-        "        Object ID 3: person, Best Confidence: 0.926"
+        "Objects detected are bounded by a box, the left corner of each box shows the object ID, object label and object confidence.\n"
+        "You are an expert investigation officer that looks for distinguished and/or suspicious feature any object detected for national security concerns.\n"
+        "1. Based on the computer vision (CV) metadata provided, identify each object and describe all the features, such as hair color, outfit color, what they are doing, etc that can be used for investigations later on."
+        "2. Generate a concise one sentence summary for the video clip.\n"
+        "3. Return your result in a valid JSON output as such.\n"
+        '''{"Features": [
+        {"description": "<object description>",
+        "object_id": "<based on CV metadata, eg: person 1, bus 1>",
+        "location": "<where is the object>",
+        }],
+        "Summary": "<video summary>"}\n'''
         "Output : "
         '''
         {
         "Features": [
         {
         "description": "A young man wearing a backpack, jeans, and a light-colored shirt. He appears to be looking at his phone. There is a red color handbag on the floor near to him.",
-        "tracker": "Young man",
+        "object_id": "person 0",
         "location": "Standing near the edge of a bus stop shelter.",
         },
         {
         ""description": "A green color SG bus with number 298",
-        "tracker": "Bus",
+        "object_id": "bus 1",
         "location": "On the road",
         },
         {
         ""description": "A bright yellow color Honda civic",
-        "tracker": "Car",
+        "object_id": "car 1",
         "location": "On the road",
         },
         {
         ""description": "An elderly woman wearing a dark jacket and seated on the bus stop bench.",
-        "tracker": "Elderly Woman",
+        "object_id": "person 1",
         "location": "Seated on the bus stop bench."
         }],
         "Video Summary": 
         "this video clip is in a restaurant setting, there are two individual in the video."
         }\n'''
-        "        ------CHUNK DATA START HERE------\n"
-        "        CV METADATA:\n        "
-        f"{'\n        '.join(cv_metadata)}"
-        "\nOutput : "
-
-                    )},
-                    *[{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_str}"}} for img_str in base64_frames]
+        "------CHUNK DATA START HERE------\n"
+        "CV METADATA:\n"
+        f"{'\n'.join(cv_metadata)}"
+        "\nOutput : ").strip())},
+            *[{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_str}"}} for img_str in base64_frames]
                 ]
             },
         ]
-        # print(messages[0]['content'][0]['text'])
+        print(messages[0]['content'][0]['text'])
         response = await client.chat.completions.create(
             model=VLM_MODEL_NAME,
             messages=messages,
